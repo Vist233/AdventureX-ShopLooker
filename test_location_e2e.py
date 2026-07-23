@@ -191,6 +191,26 @@ def confirm_manual_location(page: Page) -> None:
     expect(page.locator("#beginInterview")).to_be_enabled()
 
 
+def enter_workspace(page: Page) -> None:
+    page.locator('[data-testid="hero-start"]').click()
+    expect(page.locator("body")).to_have_attribute("data-product-view", "workspace")
+    expect(page.locator('[data-testid="location-step"]')).to_be_visible()
+
+
+def test_landing_and_workspace_are_separate(browser, base_url: str) -> None:
+    context = browser.new_context(base_url=base_url, locale="zh-CN")
+    page = context.new_page()
+    page.goto("/", wait_until="domcontentloaded")
+    expect(page.locator("body")).to_have_attribute("data-product-view", "landing")
+    expect(page.locator(".hero")).to_contain_text("5.8 万亿元")
+    expect(page.locator(".hero")).to_contain_text("339 万家")
+    expect(page.locator(".hero")).to_contain_text("65.1%")
+    expect(page.locator("#judge")).to_be_hidden()
+    enter_workspace(page)
+    expect(page.locator(".hero")).to_be_hidden()
+    context.close()
+
+
 def test_location_and_text_fallback(browser, base_url: str) -> None:
     API_COUNTS["turns"] = 0
     API_COUNTS["review"] = 0
@@ -199,6 +219,7 @@ def test_location_and_text_fallback(browser, base_url: str) -> None:
     page = context.new_page()
     errors = attach_error_collection(page)
     page.goto("/", wait_until="domcontentloaded")
+    enter_workspace(page)
 
     confirm_manual_location(page)
     expect(page.locator("#footfallTool")).to_be_visible()
@@ -270,6 +291,9 @@ def test_location_and_text_fallback(browser, base_url: str) -> None:
     expect(page.locator('[data-panel="result"]')).to_be_visible()
     expect(page.locator("#result")).to_be_visible(timeout=8_000)
     expect(page.locator(".plan-card")).to_have_count(3)
+    page.locator(".plan-detail").first.click()
+    expect(page.locator("#planDetailDialog")).to_be_visible()
+    expect(page.locator("#planDetailMarkdown")).to_contain_text("成功线")
     expect(page.locator('[data-testid="footfall-result-evidence"]')).to_contain_text("4")
     expect(page.locator('[data-testid="footfall-result-evidence"]')).to_contain_text("25.0%")
     assert API_COUNTS["review"] == 1
@@ -289,6 +313,7 @@ def test_gps_and_number_semantics(browser, base_url: str) -> None:
     page = context.new_page()
     errors = attach_error_collection(page)
     page.goto("/", wait_until="domcontentloaded")
+    enter_workspace(page)
     page.locator('[data-stage="preopen"]').click()
     page.locator("#category").fill("快餐")
     page.locator("#locateButton").click()
@@ -333,6 +358,7 @@ def test_mobile_review_layout(browser, base_url: str) -> None:
     page = context.new_page()
     errors = attach_error_collection(page)
     page.goto("/", wait_until="domcontentloaded")
+    enter_workspace(page)
     page.evaluate(
         """() => {
           state.stage = 'operating';
@@ -393,6 +419,7 @@ def main() -> None:
     with LocalSite() as site, sync_playwright() as playwright:
         browser = playwright.chromium.launch(headless=True)
         try:
+            test_landing_and_workspace_are_separate(browser, site.url)
             test_location_and_text_fallback(browser, site.url)
             test_gps_and_number_semantics(browser, site.url)
             test_mobile_review_layout(browser, site.url)

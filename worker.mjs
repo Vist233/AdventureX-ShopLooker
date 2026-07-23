@@ -1317,6 +1317,18 @@ function analysisContext(record, _body) {
   };
 }
 
+function attachPlanDetails(result) {
+  const details = Array.isArray(result?.explanation?.planDetails)
+    ? result.explanation.planDetails
+    : [];
+  if (!details.length || !Array.isArray(result?.top3)) return;
+  const byId = new Map(details.map((item) => [cleanText(item?.id, 80), trimText(item?.markdown, 2600)]));
+  result.top3.forEach((plan) => {
+    const markdown = byId.get(cleanText(plan?.id, 80));
+    if (markdown) plan.detail_markdown = markdown;
+  });
+}
+
 async function runAnalysis(record, run, env, body) {
   const context = analysisContext(record, body);
   const llm = createTextLlm(env);
@@ -1367,11 +1379,16 @@ async function runAnalysis(record, run, env, body) {
                 evidence: ["string"],
                 unknowns: ["string"],
                 whyThesePlans: ["string"],
-                caution: "string"
+                caution: "string",
+                planDetails: [{
+                  id: "must exactly equal one top_plans id",
+                  markdown: "Markdown. Explain this existing plan only: why first, exact action, evidence boundary, budget/duration/metric/success/stop and fastest falsification. Do not alter any supplied value."
+                }]
               }
             })
           }
         ], { temperature: 0.15, maxTokens: 1500 });
+        attachPlanDetails(result);
       } catch (error) {
         run.warning = `方案已完成，但AI解释生成失败：${error instanceof Error ? error.message : "unknown"}`;
       }
@@ -1425,11 +1442,16 @@ async function finishQueuedAnalysis(run, env, llm) {
             top_plans: result.top3,
             output_schema: {
               headline: "string", diagnosis: "string", evidence: ["string"],
-              unknowns: ["string"], whyThesePlans: ["string"], caution: "string"
+              unknowns: ["string"], whyThesePlans: ["string"], caution: "string",
+              planDetails: [{
+                id: "must exactly equal one top_plans id",
+                markdown: "Markdown. Explain this existing plan only: why first, exact action, evidence boundary, budget/duration/metric/success/stop and fastest falsification. Do not alter any supplied value."
+              }]
             }
           })
         }
       ], { temperature: 0.15, maxTokens: 1500 });
+      attachPlanDetails(result);
     } catch (error) {
       run.warning = `方案已完成，但AI解释生成失败：${error instanceof Error ? error.message : "unknown"}`;
     }

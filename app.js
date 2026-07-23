@@ -15,6 +15,7 @@ const DEMO_CHAR_MS = DEMO_TURN_MS < 100 ? 0 : 16;
 
 const state = {
   panel: "location",
+  productView: DEMO_MODE ? "workspace" : "landing",
   stage: null,
   caseId: null,
   caseToken: null,
@@ -156,6 +157,20 @@ function escapeHtml(value) {
   return String(value ?? "").replace(/[&<>"']/g, (char) => ({
     "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#039;"
   }[char]));
+}
+
+function setProductView(view, { scroll = false } = {}) {
+  state.productView = view;
+  document.body.dataset.productView = view;
+  if (scroll) {
+    const target = view === "landing" ? $("top") : $("judge");
+    target?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+}
+
+function enterWorkspace() {
+  setProductView("workspace");
+  setPanel("location");
 }
 
 function setPanel(panel) {
@@ -340,6 +355,7 @@ function syncCategoryChips() {
 
 function configureDemoLanding() {
   if (!DEMO_MODE) return;
+  setProductView("workspace");
   document.body.classList.add("demo-mode");
   chooseStage("operating");
   $("category").value = "私房小碗菜";
@@ -1127,6 +1143,7 @@ function activateLocalFallback(message) {
 
 async function beginInterview() {
   if (!state.stage || !state.locationConfirmed) return;
+  setProductView("workspace");
   if (DEMO_MODE) {
     void startDemoInterview();
     return;
@@ -1810,6 +1827,7 @@ async function startAnalysis() {
     $("reviewFormStatus").textContent = "请先在本页底部点击“确定提交”。";
     return;
   }
+  setProductView("result");
   setPanel("result");
   $("analysisProgress").hidden = false;
   $("result").hidden = true;
@@ -1897,6 +1915,7 @@ function demoAnalysisResult() {
 }
 
 function startDemoAnalysis() {
+  setProductView("result");
   setPanel("result");
   $("analysisProgress").hidden = false;
   $("result").hidden = true;
@@ -2071,8 +2090,79 @@ function normalizePlan(plan, index) {
     metric: plan.metric || "关键经营指标",
     successLine: plan.successLine || plan.success_line || "达到预设改善线",
     stopLine: plan.stopLine || plan.stop_line || "没有改善就停止",
-    score: plan.score ?? Math.max(70, 90 - index * 5)
+    score: plan.score ?? Math.max(70, 90 - index * 5),
+    mechanism: plan.mechanism || "通过一项低成本、可撤回的动作验证关键经营假设。",
+    hypothesis: plan.hypothesis || "该行动会改善当前首先断裂的经营环节。",
+    evidenceRefs: Array.isArray(plan.evidenceRefs || plan.evidence_refs) ? (plan.evidenceRefs || plan.evidence_refs) : [],
+    assumptions: Array.isArray(plan.assumptions) ? plan.assumptions : [],
+    contraindications: Array.isArray(plan.contraindications) ? plan.contraindications : [],
+    falsification: plan.falsification || "在验证周期内按预设指标观察，未达到成功线即停止。",
+    detailMarkdown: typeof (plan.detailMarkdown || plan.detail_markdown) === "string"
+      ? (plan.detailMarkdown || plan.detail_markdown).trim()
+      : ""
   };
+}
+
+function planMarkdown(plan) {
+  if (plan.detailMarkdown) return plan.detailMarkdown;
+  const refs = plan.evidenceRefs.length ? plan.evidenceRefs.map((item) => `- ${item}`).join("\n") : "- 本次已确认的经营事实与确定性计算结果";
+  const assumptions = plan.assumptions.length ? plan.assumptions.map((item) => `- ${item}`).join("\n") : "- 先把这条动作当作需要验证的假设，不把预期效果当成事实。";
+  const risks = plan.contraindications.length ? plan.contraindications.map((item) => `- ${item}`).join("\n") : "- 未达到成功线时，不追加预算、不扩大范围。";
+  return `# ${plan.title}
+
+## 先解决什么
+${plan.bottleneck}
+
+## 为什么先做这件事
+${plan.mechanism}
+
+## 需要验证的假设
+${plan.hypothesis}
+
+## 已依据的事实
+${refs}
+
+## 具体怎么做
+${plan.action}
+
+## 执行边界
+- 预算上限：¥${money.format(Number(plan.budgetCap) || 0)}
+- 验证周期：${plan.durationDays} 天
+- 观测指标：${plan.metric}
+- 成功线：${plan.successLine}
+- 停止线：${plan.stopLine}
+
+## 前提与风险
+${assumptions}
+${risks}
+
+## 最快证伪方式
+${plan.falsification}`;
+}
+
+function openPlanDetail(plan) {
+  $("planDetailTitle").textContent = plan.title;
+  $("planDetailMarkdown").textContent = planMarkdown(plan);
+  const dialog = $("planDetailDialog");
+  if (typeof dialog.showModal === "function") dialog.showModal();
+  else dialog.setAttribute("open", "");
+}
+
+function renderResultFactEvidence() {
+  const facts = reviewableFacts();
+  const confirmed = facts.filter((fact) => fact.status === "confirmed").length;
+  const provisional = facts.filter((fact) => fact.status === "provisional" || fact.status === "assumption").length;
+  const unknown = facts.filter((fact) => fact.status === "unknown" || fact.status === "conflict").length;
+  const locationState = state.locationConfirmed ? "位置已确认" : "位置待确认";
+  $("resultFactSummary").textContent = `本案卷有 ${confirmed} 项已确认、${provisional} 项暂定、${unknown} 项未知；${locationState}。未知项没有被按 0 计入计算。`;
+  const priority = [...facts].sort((a, b) => {
+    const score = (fact) => fact.status === "confirmed" ? 0 : fact.status === "unknown" ? 2 : 1;
+    return score(a) - score(b);
+  }).slice(0, 8);
+  $("resultFactList").innerHTML = priority.length ? priority.map((fact) => {
+    const stateLabel = fact.status === "confirmed" ? "已确认" : fact.status === "unknown" ? "未知" : "待确认";
+    return `<article><span>${escapeHtml(fact.label || FACT_LABELS[fact.id] || fact.id)}</span><b>${escapeHtml(formatFact(fact))}</b><small>${escapeHtml(stateLabel)} · ${escapeHtml(fact.source || "系统整理")}</small></article>`;
+  }).join("") : "<p>暂时没有可展示的事实；请先完成问诊与纠偏。</p>";
 }
 
 function renderAnalysisResult(data) {
@@ -2101,6 +2191,7 @@ function renderAnalysisResult(data) {
 
   const narrative = data.narrative || data.explanation || {};
   $("narrative").innerHTML = `<h3>${escapeHtml(narrative.title || narrative.headline || "为什么这样判断")}</h3><p>${escapeHtml(narrative.body || narrative.diagnosis || assessment.reason || "")}</p>`;
+  renderResultFactEvidence();
   const plans = (data.topPlans || data.top3 || data.plans || []).slice(0, 3).map(normalizePlan);
   const evidenceTasks = (data.evidence_tasks || []).slice(0, 3).map(normalizePlan);
   $("candidateCount").textContent = `${data.candidateCount ?? data.generated ?? 3} 个候选 · ${data.verified ?? plans.length} 个通过`;
@@ -2115,7 +2206,7 @@ function renderAnalysisResult(data) {
         <div><span>观测指标</span><b>${escapeHtml(plan.metric)}</b></div>
       </div>
       <div class="plan-lines"><b>成功线：</b>${escapeHtml(plan.successLine)}<br><b>停止线：</b>${escapeHtml(plan.stopLine)}</div>
-      <button type="button" class="plan-start" data-plan-id="${escapeHtml(plan.id)}">选择这个方案并生成清单</button>
+      <button type="button" class="plan-detail" data-plan-index="${index}">查看详细方案</button>
     </article>
   `).join("") : evidenceTasks.length ? `
     <p>当前没有方案通过双重核验。下面只是补证据任务，不计分、不标 TOP，也不等于经营建议。</p>
@@ -2128,8 +2219,8 @@ function renderAnalysisResult(data) {
       </article>
     `).join("")}
   ` : "<p>当前没有方案通过硬核验。先补证据，比凑三个建议更可靠。</p>";
-  $("planList").querySelectorAll(".plan-start").forEach((button) => {
-    button.addEventListener("click", () => void startSelectedPlan(button.dataset.planId, button));
+  $("planList").querySelectorAll(".plan-detail").forEach((button) => {
+    button.addEventListener("click", () => openPlanDetail(plans[Number(button.dataset.planIndex)]));
   });
   const rejected = data.rejectedReasons || (data.rejected || []).slice(0, 6).map((item) => (
     item.reasons?.[0] || item.phase || "未通过硬核验"
@@ -2223,6 +2314,7 @@ function resetFlow() {
   $("analysisProgress").hidden = false;
   setLocationStatus("", "请选择阶段，再取得位置");
   renderFootfall();
+  setProductView(DEMO_MODE ? "workspace" : "landing");
   setPanel("location");
 }
 
@@ -2297,8 +2389,22 @@ $("fallbackAnswer").addEventListener("keydown", (event) => {
 $("startAnalysis").addEventListener("click", () => void startAnalysis());
 $("restartButton").addEventListener("click", resetFlow);
 $("loadDemoButton").addEventListener("click", loadDemo);
+$("closePlanDetail").addEventListener("click", () => $("planDetailDialog").close());
+$("planDetailDialog").addEventListener("click", (event) => {
+  if (event.target === $("planDetailDialog")) $("planDetailDialog").close();
+});
+document.querySelector("[data-testid=hero-start]").addEventListener("click", (event) => {
+  event.preventDefault();
+  enterWorkspace();
+});
+document.querySelector(".brand").addEventListener("click", (event) => {
+  if (DEMO_MODE) return;
+  event.preventDefault();
+  setProductView("landing", { scroll: true });
+});
 
 configureDemoLanding();
+if (!DEMO_MODE) setProductView("landing");
 
 fetch("data/corpus_analysis.json")
   .then((response) => response.ok ? response.json() : Promise.reject())
