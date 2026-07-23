@@ -1,0 +1,15 @@
+name = "yongge"
+compatibility_date = "2026-07-23"
+workers_dev = true
+main = "worker.mjs"
+
+# A Custom Domain makes Cloudflare create and manage the DNS record and TLS
+# certificate. It avoids exposing a Pages project as the production origin.
+[[routes]]
+pattern = "yongge.zhangyvjing.com"
+custom_domain = true
+
+[assets]
+directory = "./dist"
+binding = "ASSETS"
+not_found_handling = "single-page-application"

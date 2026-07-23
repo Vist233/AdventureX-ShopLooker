@@ -1,0 +1,290 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="店判：用当前位置和几项关键数字，判断餐饮店该继续、测试、停止还是退出。">
+  <title>店判 · 先判断，再投钱</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="#top" aria-label="店判首页">
+      <span class="brand-mark">判</span>
+      <span>店判</span>
+    </a>
+    <span class="topbar-proof"><b id="heroTitles">623</b> 个餐饮案例校准</span>
+  </header>
+
+  <main id="top">
+    <section class="hero">
+      <div class="hero-copy">
+        <span class="eyebrow">先判断，再投钱</span>
+        <h1>这家店，<br><em>还该不该继续？</em></h1>
+        <p>不用写商业计划书。授权当前位置，填几项关键数字，回答三个问题，系统直接告诉你：继续、先测试、停止投入，还是准备退出。</p>
+        <a class="primary-button" href="#judge">开始判断 · 约 2 分钟</a>
+      </div>
+      <div class="hero-result" aria-label="产品输出示例">
+        <span>系统不会给你一篇空建议</span>
+        <strong>先别再投钱</strong>
+        <p>每天至少要卖 74 单才能保本。先花 300 元验证门头和客流，不要直接追加 20 万装修。</p>
+        <div>
+          <small>输出</small>
+          <b>继续 / 测试 / 停止 / 退出</b>
+        </div>
+      </div>
+    </section>
+
+    <section class="principles" aria-label="判断原则">
+      <span>人流不等于客流</span>
+      <span>营业额不等于利润</span>
+      <span>已经花的钱不等于还要继续</span>
+    </section>
+
+    <section class="judge" id="judge">
+      <div class="judge-heading">
+        <div>
+          <span class="section-kicker">2 分钟完成</span>
+          <h2>只回答系统不知道的事</h2>
+        </div>
+        <ol class="progress" aria-label="判断进度">
+          <li class="active" data-progress="1"><b>1</b><span>阶段</span></li>
+          <li data-progress="2"><b>2</b><span>位置</span></li>
+          <li data-progress="3"><b>3</b><span>账目</span></li>
+          <li data-progress="4"><b>4</b><span>现场</span></li>
+        </ol>
+      </div>
+
+      <div class="flow-shell">
+        <section class="flow-card active" data-step="1">
+          <div class="step-title">
+            <span>第一步</span>
+            <h3>你现在最想判断什么？</h3>
+            <p>不用描述问题，先选你所处的阶段。</p>
+          </div>
+          <div class="stage-options">
+            <button type="button" class="choice-card" data-stage="preopen">
+              <i>未</i>
+              <span><b>准备开店 / 接店</b><small>判断租约、加盟、转让和装修值不值得投</small></span>
+            </button>
+            <button type="button" class="choice-card" data-stage="operating">
+              <i>营</i>
+              <span><b>已经营业</b><small>判断应该救、改、缩，还是尽快退出</small></span>
+            </button>
+          </div>
+        </section>
+
+        <section class="flow-card" data-step="2" hidden>
+          <div class="step-title">
+            <span>第二步</span>
+            <h3>你现在就在店里吗？</h3>
+            <p>店判会用腾讯地图读取地址和周边地点。地图只能提供线索，不能代替你观察门头和真实客流。</p>
+          </div>
+
+          <label class="category-field">
+            <span>这家店卖什么？</span>
+            <input id="category" type="text" maxlength="30" placeholder="例如：咖啡、火锅、快餐">
+          </label>
+
+          <button class="location-button" id="locateButton" type="button">
+            <span class="location-icon">◎</span>
+            <span><b>使用我现在的位置</b><small>用于向腾讯地图查询，本页不保存</small></span>
+          </button>
+
+          <div class="location-status" id="locationStatus" aria-live="polite">
+            <span class="status-dot"></span>
+            <p>等待定位</p>
+          </div>
+
+          <div class="map-summary" id="mapSummary" hidden>
+            <div>
+              <small>已确认店铺位置</small>
+              <strong id="mapAddress">—</strong>
+              <span id="mapDistrict">—</span>
+            </div>
+            <div>
+              <small>附近同类地点</small>
+              <strong id="mapCompetitors">—</strong>
+              <span>800 米内腾讯地图结果，仅作线索</span>
+            </div>
+            <div class="nearby-tags" id="nearbyTags"></div>
+          </div>
+
+          <details class="manual-location" id="manualLocationDetails">
+            <summary>不在店里或定位失败</summary>
+            <p class="manual-location-hint" id="manualLocationHint">写下城市和商圈，最好补充路名或门牌号；系统会自动查找附近同类店。</p>
+            <label>店铺在哪里<input id="manualLocation" type="text" autocomplete="street-address" enterkeyhint="search" aria-describedby="manualLocationHint" placeholder="例如：上海市黄浦区南京东路 300 号"></label>
+            <button id="useManualLocation" type="button">查找这个位置</button>
+          </details>
+
+          <div class="step-actions">
+            <button class="back-button" type="button" data-back="1">上一步</button>
+            <button class="next-button" id="locationNext" type="button" disabled>继续填账目</button>
+          </div>
+        </section>
+
+        <section class="flow-card" data-step="3" hidden>
+          <div class="step-title">
+            <span>第三步</span>
+            <h3>填几项你应该知道的数字</h3>
+            <p>统一按一个月填写。人工必须把老板自己的工资算进去。</p>
+          </div>
+
+          <form id="moneyForm" class="money-form">
+            <label class="operating-only">一个月营业额
+              <span class="money-input"><i>¥</i><input id="monthlyRevenue" inputmode="decimal" type="number" min="0" step="1000" placeholder="例如 120000"></span>
+            </label>
+            <label>每卖 100 元，食材和平台大约花多少
+              <span class="money-input suffix"><input id="variableCostRate" inputmode="decimal" type="number" min="1" max="95" step="1" value="45"><i>元</i></span>
+              <small>不知道时先填 45，结果会降低可信度</small>
+            </label>
+            <label>一个月房租＋物业
+              <span class="money-input"><i>¥</i><input id="rent" inputmode="decimal" type="number" min="0" step="1000" placeholder="例如 12000"></span>
+            </label>
+            <label>一个月人工＋老板工资
+              <span class="money-input"><i>¥</i><input id="labor" inputmode="decimal" type="number" min="0" step="1000" placeholder="例如 30000"></span>
+            </label>
+            <label>一个月水电、营销和其他固定支出
+              <span class="money-input"><i>¥</i><input id="otherFixed" inputmode="decimal" type="number" min="0" step="1000" placeholder="例如 8000"></span>
+            </label>
+            <label>现在还能拿出来的现金
+              <span class="money-input"><i>¥</i><input id="cashReserve" inputmode="decimal" type="number" min="0" step="1000" placeholder="例如 100000"></span>
+            </label>
+            <label>平均每单多少钱
+              <span class="money-input"><i>¥</i><input id="avgTicket" inputmode="decimal" type="number" min="1" step="1" placeholder="例如 45"></span>
+            </label>
+            <label class="preopen-only" hidden>签约、加盟、转让和装修一共准备投多少
+              <span class="money-input"><i>¥</i><input id="plannedCommitment" inputmode="decimal" type="number" min="0" step="1000" placeholder="例如 300000"></span>
+            </label>
+
+            <details class="optional-money">
+              <summary>还有负债或其他重要支出</summary>
+              <label>与这家店直接相关的剩余债务
+                <span class="money-input"><i>¥</i><input id="debt" inputmode="decimal" type="number" min="0" step="1000" value="0"></span>
+              </label>
+            </details>
+          </form>
+
+          <div class="step-actions">
+            <button class="back-button" type="button" data-back="2">上一步</button>
+            <button class="next-button" id="moneyNext" type="button">继续看现场</button>
+          </div>
+          <p class="form-error" id="moneyError" aria-live="polite"></p>
+        </section>
+
+        <section class="flow-card" data-step="4" hidden>
+          <div class="step-title">
+            <span>第四步</span>
+            <h3>最后三个现场问题</h3>
+            <p>不知道就选“不确定”。假装知道，比没有答案更危险。</p>
+          </div>
+
+          <div class="evidence-questions">
+            <fieldset>
+              <legend>经过这里的人，大部分会买你这类产品吗？</legend>
+              <div class="answer-row" data-answer-group="trafficMatch">
+                <button type="button" data-value="yes">是</button>
+                <button type="button" data-value="no">不是</button>
+                <button type="button" data-value="unknown">不确定</button>
+              </div>
+            </fieldset>
+            <fieldset>
+              <legend>从主要来路，10 秒内能看懂你卖什么和价格吗？</legend>
+              <div class="answer-row" data-answer-group="visibility">
+                <button type="button" data-value="yes">能</button>
+                <button type="button" data-value="no">不能</button>
+                <button type="button" data-value="unknown">不确定</button>
+              </div>
+            </fieldset>
+            <fieldset>
+              <legend id="thirdQuestion">买过的人，会再次回来吗？</legend>
+              <div class="answer-row" data-answer-group="retention">
+                <button type="button" data-value="yes">会</button>
+                <button type="button" data-value="no">不会</button>
+                <button type="button" data-value="unknown">不确定</button>
+              </div>
+            </fieldset>
+          </div>
+
+          <div class="step-actions">
+            <button class="back-button" type="button" data-back="3">上一步</button>
+            <button class="next-button strong" id="calculateButton" type="button">给我判断</button>
+          </div>
+          <p class="form-error" id="evidenceError" aria-live="polite"></p>
+        </section>
+      </div>
+
+      <section class="result" id="result" hidden aria-live="polite">
+        <div class="result-main">
+          <div class="decision-label"><span id="decisionCode">TEST</span><small id="confidenceLabel">证据完整度 80%</small></div>
+          <h2 id="decisionTitle">先做小测试，暂时不要追加投入</h2>
+          <p id="decisionReason">当前最需要验证的不是“能不能多卖”，而是经过的人是否会看见、进店并再次回来。</p>
+        </div>
+
+        <div class="result-metrics">
+          <article>
+            <span>每天至少卖到</span>
+            <strong id="breakEvenDaily">—</strong>
+            <small id="breakEvenOrders">—</small>
+          </article>
+          <article class="operating-result">
+            <span>每月真实经营结果</span>
+            <strong id="monthlyProfit">—</strong>
+            <small>已扣食材、平台、房租、人工和固定支出</small>
+          </article>
+          <article>
+            <span id="thirdMetricLabel">现金还能撑</span>
+            <strong id="thirdMetricValue">—</strong>
+            <small id="thirdMetricHint">保持现在的情况下</small>
+          </article>
+        </div>
+
+        <div class="one-action">
+          <span>现在只做这一件事</span>
+          <strong id="nextAction">—</strong>
+          <p id="stopLine">—</p>
+        </div>
+
+        <details class="result-details">
+          <summary>查看判断依据和风险</summary>
+          <div class="risk-list" id="riskList"></div>
+          <div class="scenario-list" id="scenarioList"></div>
+          <p>地图 POI 只能描述附近有什么，不能证明谁会经过、能否看见门头或是否购买。最终现场证据仍需人工确认。</p>
+        </details>
+
+        <div class="result-actions">
+          <button class="secondary-button" id="restartButton" type="button">重新判断</button>
+          <button class="primary-button" id="loadDemoButton" type="button">载入演示案例</button>
+        </div>
+      </section>
+    </section>
+
+    <section class="method">
+      <div>
+        <span class="section-kicker">从 623 个案例中得到</span>
+        <h2>用户真正需要的不是经营知识，<br>而是下一笔钱该不该花。</h2>
+      </div>
+      <div class="method-grid">
+        <article><strong>49.8%</strong><span>标题涉及亏损与现金流</span><p>“提高营业额”往往只是已经亏钱之后说得出口的表层请求。</p></article>
+        <article><strong>37.9%</strong><span>标题涉及投入过重</span><p>真正危险的是租约、加盟、装修和转让费带来的不可逆下注。</p></article>
+        <article><strong>98.7%</strong><span>高可信字幕涉及位置与客流</span><p>勇哥先看现场，再算账，最后判断哪一个转化环节断了。</p></article>
+      </div>
+      <div class="method-chain">
+        <span>当前位置与周边</span><i>→</i>
+        <span>真实成本和保本线</span><i>→</i>
+        <span>客流转化断点</span><i>→</i>
+        <span>继续 / 测试 / 停止 / 退出</span>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <div><span class="brand-mark small">判</span><b>店判</b></div>
+    <p>这是经营决策筛查工具，不替代会计、法律或投资意见。</p>
+    <span><b id="heroAccepted">156</b> 份高可信字幕 · <b id="heroExcluded">324</b> 份问题字幕已剔除</span>
+  </footer>
+
+  <script src="decision-engine.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
