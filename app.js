@@ -7,6 +7,11 @@ const FLOW_ORDER = ["location", "interview", "review", "result"];
 const LOCAL_VAD_SILENCE_MS = 600;
 const LOCAL_VAD_PRE_ROLL_MS = 280;
 const LOCAL_VAD_MAX_SEGMENT_MS = 20_000;
+const DEMO_ORIGIN = "https://demo.yongge.zhangyvjing.com";
+const DEMO_MODE = window.location.hostname === "demo.yongge.zhangyvjing.com"
+  || new URLSearchParams(window.location.search).get("demo") === "1";
+const DEMO_TURN_MS = Math.max(40, Number(new URLSearchParams(window.location.search).get("demoSpeed")) || 4000);
+const DEMO_CHAR_MS = DEMO_TURN_MS < 100 ? 0 : 16;
 
 const state = {
   panel: "location",
@@ -41,6 +46,8 @@ const state = {
   audio: null,
   recognition: null,
   analysisTimer: null,
+  demoMode: DEMO_MODE,
+  demoPlaybackToken: 0,
   footfall: {
     durationSeconds: 20 * 60,
     remainingSeconds: 20 * 60,
@@ -111,6 +118,39 @@ const QUESTION_BANK = {
 const FACT_LABELS = Object.fromEntries(
   Object.values(QUESTION_BANK).flat().map(([id, , , label]) => [id, label])
 );
+
+// 已筛选字幕案例：BV15vrVBwEVP（勇哥餐饮创业说）。其中的“月营业额”
+// 由“一天约 4000”按 30 天换算，所有原视频没有给出的字段都如实标未知。
+const DEMO_CASE = {
+  location: {
+    source: "demo-subtitle",
+    address: "山西省运城市稷山县示例小碗菜店",
+    city: "运城市",
+    district: "稷山县",
+    nearbyCount: 6,
+    places: [{ title: "县城主街餐饮带" }, { title: "周边居民区" }]
+  },
+  turns: [
+    ["goal", "我想看看座位要不要再规划一下，外卖怎么上。"],
+    ["monthlyRevenue", "一天大约四千，按一个月三十天大约十二万。"],
+    ["ordersDaily", "这个没有专门算过。"],
+    ["avgTicket", "这个没有专门算过。"],
+    ["variableCostRate", "毛利大约百分之四十五，所以变动成本大约百分之五十五。"],
+    ["rent", "房租一年两万七，不是一个月。"],
+    ["labor", "人工一个月一万八到一万九。"],
+    ["ownerReplacementWage", "我不知道，没单独算老板和家人的工资。"],
+    ["staffCount", "六个长期员工，还有两个小时工。"],
+    ["otherFixed", "水电气一个月大约一万。"],
+    ["cashReserve", "这个没细算过。"],
+    ["debt", "我不知道，这次连麦里没有说。"],
+    ["channel", "堂食为主，外卖现在只能做随机搭配。"],
+    ["trafficMatch", "这个没有专门数过。"],
+    ["visibility", "我不知道，没有做过专门测试。"],
+    ["retention", "这个没有专门统计过。"],
+    ["initialInvestment", "一开始总共投了十三万左右。"],
+    ["lease", "房租已经交了一年，合同也签了一年。"]
+  ]
+};
 
 function escapeHtml(value) {
   return String(value ?? "").replace(/[&<>"']/g, (char) => ({
@@ -291,6 +331,26 @@ function chooseStage(stage) {
   updateBeginState();
 }
 
+function syncCategoryChips() {
+  const value = $("category").value.trim();
+  document.querySelectorAll("[data-category]").forEach((button) => {
+    button.classList.toggle("selected", button.dataset.category === value);
+  });
+}
+
+function configureDemoLanding() {
+  if (!DEMO_MODE) return;
+  document.body.classList.add("demo-mode");
+  chooseStage("operating");
+  $("category").value = "私房小碗菜";
+  syncCategoryChips();
+  $("locateButton").querySelector("b").textContent = "获取案例地图信息";
+  $("locateButton").querySelector("small").textContent = "载入一条已筛选的勇哥餐饮创业说案例";
+  $("beginInterview").textContent = "下一步：观看案例问诊";
+  $("loadDemoButton").textContent = "重新观看完整演示";
+  setLocationStatus("notice", "这是纯演示案例：点击获取地图信息后，按原流程继续。\n");
+}
+
 function updateBeginState() {
   $("beginInterview").disabled = !(state.stage && state.locationConfirmed);
 }
@@ -405,6 +465,10 @@ async function offerLocationFallback(reason, attempt) {
 }
 
 function locateCurrentStore() {
+  if (DEMO_MODE) {
+    void loadDemoLocation();
+    return;
+  }
   const attempt = ++state.locationAttempt;
   state.locationConfirmed = false;
   state.locationCandidate = null;
@@ -442,6 +506,18 @@ function locateCurrentStore() {
     const labels = { 1: "没有取得精确定位权限。", 2: "暂时无法取得精确位置。", 3: "精确定位超时。" };
     void offerLocationFallback(labels[error.code] || "精确定位失败。", attempt);
   }, { enableHighAccuracy: true, timeout: 10000, maximumAge: 60000 });
+}
+
+async function loadDemoLocation() {
+  $("locateButton").disabled = true;
+  setLocationStatus("loading", "正在从字幕案例中载入位置与经营背景…");
+  await new Promise((resolve) => setTimeout(resolve, 650));
+  state.mapContextLoaded = true;
+  renderMapCandidate(DEMO_CASE.location);
+  confirmLocation();
+  $("confirmLocation").hidden = true;
+  setLocationStatus("success", "案例位置、经营阶段和品类已载入。点击下一步，观看完整问诊。 ");
+  $("locateButton").disabled = false;
 }
 
 async function useManualLocation() {
@@ -1051,6 +1127,10 @@ function activateLocalFallback(message) {
 
 async function beginInterview() {
   if (!state.stage || !state.locationConfirmed) return;
+  if (DEMO_MODE) {
+    void startDemoInterview();
+    return;
+  }
   setPanel("interview");
   state.interview.active = true;
   state.interview.paused = false;
@@ -1098,6 +1178,90 @@ async function beginInterview() {
     kind: first.kind || questionAt(0)?.kind || "text",
     label: first.label || FACT_LABELS[first.field] || questionAt(0)?.label
   }, 0);
+}
+
+function wait(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function typeDemoText(element, text, token, delay = 18) {
+  element.textContent = "";
+  for (let index = 0; index < text.length; index += 1) {
+    if (token !== state.demoPlaybackToken) return false;
+    element.textContent += text[index];
+    await wait(delay);
+  }
+  return true;
+}
+
+function speakDemoQuestion(text) {
+  if (!("speechSynthesis" in window)) return;
+  try {
+    window.speechSynthesis.cancel();
+    const utterance = new SpeechSynthesisUtterance(text);
+    utterance.lang = "zh-CN";
+    utterance.rate = 1.12;
+    window.speechSynthesis.speak(utterance);
+  } catch (_) {
+    // The visual stream remains the source of truth when device TTS is absent.
+  }
+}
+
+function setDemoQuestion(question, index) {
+  state.interview.questionIndex = index;
+  state.interview.turnId = `demo-turn-${index + 1}`;
+  $("currentQuestion").dataset.factId = question.id;
+  $("currentQuestion").dataset.factKind = question.kind || "text";
+  $("currentQuestion").dataset.factLabel = question.label || FACT_LABELS[question.id] || "事实";
+  $("questionProgress").textContent = `${index + 1} / ${DEMO_CASE.turns.length}`;
+  $("questionHint").textContent = "Demo 正在按案例字幕逐题展示问答。";
+}
+
+async function startDemoInterview() {
+  const token = ++state.demoPlaybackToken;
+  state.localMode = true;
+  state.caseId = `demo-${Date.now()}`;
+  state.caseToken = null;
+  state.interview.active = true;
+  state.interview.paused = false;
+  state.interview.complete = false;
+  state.interview.mode = "demo";
+  state.interview.questionIndex = -1;
+  upsertFact({ id: "stage", label: "经营阶段", kind: "text", value: state.stage, status: "confirmed", source: "choice", evidence: "B" });
+  upsertFact({ id: "category", label: "经营品类", kind: "text", value: $("category").value.trim(), status: "confirmed", source: "document", evidence: "B", raw: "字幕案例：私房小碗菜" });
+  $("textFallback").hidden = true;
+  $("pauseInterview").hidden = true;
+  $("finishInterview").hidden = true;
+  $("transcriptMode").textContent = "演示模式：答案来自已筛选字幕；不会调用 ASR 或保存案卷";
+  setPanel("interview");
+  for (let index = 0; index < DEMO_CASE.turns.length; index += 1) {
+    if (token !== state.demoPlaybackToken) return;
+    const [factId, answer] = DEMO_CASE.turns[index];
+    const question = questionList().find(([id]) => id === factId);
+    if (!question) continue;
+    const startedAt = Date.now();
+    const prepared = { id: question[0], text: question[1], kind: question[2], label: question[3] };
+    setDemoQuestion(prepared, index);
+    setListening("", "AI 正在提问");
+    const questionComplete = await typeDemoText($("currentQuestion"), prepared.text, token, DEMO_CHAR_MS);
+    if (!questionComplete) return;
+    speakDemoQuestion(prepared.text);
+    await wait(Math.min(500, DEMO_TURN_MS * .16));
+    setListening("live", "正在展示案例回答");
+    const answerComplete = await typeDemoText($("liveTranscript"), answer, token, DEMO_CHAR_MS);
+    if (!answerComplete) return;
+    const fact = upsertFact(extractLocalFact(answer));
+    state.transcripts.push({ turnId: state.interview.turnId, question: prepared.text, text: answer, factId: fact.id, source: "demo-subtitle" });
+    const remaining = DEMO_TURN_MS - (Date.now() - startedAt);
+    if (remaining > 0) await wait(remaining);
+  }
+  if (token !== state.demoPlaybackToken) return;
+  state.interview.active = false;
+  state.interview.complete = true;
+  if ("speechSynthesis" in window) window.speechSynthesis.cancel();
+  prepareReview();
+  $("submitReview").textContent = "下一步：查看判断";
+  $("reviewFormStatus").textContent = "演示档案已填好。按钮可以点击，但不会改写这条案例；直接点下一步继续。";
 }
 
 function parseMagnitude(numberText, unit) {
@@ -1364,6 +1528,15 @@ function renderReviewForm() {
   }).join("");
 
   $("reviewFactsList").querySelectorAll(".fact-review-row").forEach((row) => {
+    if (DEMO_MODE) {
+      row.addEventListener("click", (event) => {
+        event.preventDefault();
+        row.classList.remove("demo-tapped");
+        requestAnimationFrame(() => row.classList.add("demo-tapped"));
+      }, true);
+      row.querySelector("[data-role=edit-text]").readOnly = true;
+      return;
+    }
     row.querySelectorAll('input[type="radio"]').forEach((radio) => {
       radio.addEventListener("change", () => {
         row.dataset.mode = radio.value;
@@ -1475,6 +1648,11 @@ function collectReviewCorrections() {
 }
 
 async function submitReviewForm() {
+  if (DEMO_MODE) {
+    state.reviewSubmitted = true;
+    startDemoAnalysis();
+    return;
+  }
   let corrections = collectReviewCorrections();
   if (!corrections) {
     $("reviewFormStatus").textContent = "有一项修改无法解析，请按红色提示处理。";
@@ -1668,6 +1846,70 @@ async function startAnalysis() {
     stopProgressAnimation();
     renderAnalysisResult(localAnalysis());
   }, 4300);
+}
+
+function demoAnalysisResult() {
+  return {
+    deterministic: {
+      decision: "TEST",
+      title: "先把座位与外卖做成可测的小实验",
+      reason: "案例中的日营业额、毛利、房租、人工和水电已能说明门店有经营余量；但订单、客单、复购和老板劳动仍未知，不能把“生意不错”直接当成可以盲目扩张。",
+      metrics: {
+        completeness: 63,
+        breakEvenDaily: 2_350,
+        breakEvenOrders: 59,
+        monthlyProfit: 22_750,
+        runway: Infinity
+      }
+    },
+    narrative: {
+      title: "勇哥式判断：先看高峰承接，不先扩店",
+      body: "这条案例来自山西运城稷山县的私房小碗菜店。字幕中店主说日收约 4000、毛利约 45%、年租 2.7 万、人工约 1.8—1.9 万、水电气约 1 万，同时反映座位不够、外卖只能随机搭配。先用低成本实验验证座位周转和固定套餐，而不是立刻追加装修或人员。"
+    },
+    candidateCount: 3,
+    verified: 3,
+    topPlans: [
+      {
+        id: "demo-seat-flow", title: "连续三天记录高峰座位与放弃入店", score: 93,
+        bottleneck: "座位与动线承接", action: "午、晚高峰各记录 90 分钟：到店、等位、离开、入座时间。只移动非关键物料和排队提示，不先装修。",
+        budgetCap: 300, durationDays: 3, metric: "高峰放弃入店数与翻台时间",
+        successLine: "放弃入店下降 20%，且平均等位不变长", stopLine: "三天没有拥堵证据，就停止为座位追加预算"
+      },
+      {
+        id: "demo-takeaway-set", title: "用固定可供套餐替代随机外卖", score: 89,
+        bottleneck: "外卖菜单不可理解", action: "只挑每日稳定供应的 3 组套餐上架；缺货就下架，不用随机菜名承诺固定菜品。",
+        budgetCap: 200, durationDays: 3, metric: "外卖有效订单与退款率",
+        successLine: "三天内固定套餐带来稳定订单且退款不升", stopLine: "若出餐混乱或退款上升，立即撤回套餐"
+      },
+      {
+        id: "demo-energy-ledger", title: "把水电气拆成每日账，再决定设备动作", score: 84,
+        bottleneck: "高能耗成本未拆账", action: "连续七天分开记录电、气、保温台和主要设备开启时段，先找异常项，不直接更换设备。",
+        budgetCap: 0, durationDays: 7, metric: "每百元营业额水电气成本",
+        successLine: "找出可关闭、错峰或替代的一项明确成本", stopLine: "数据无异常时，不为节能设备新增投入"
+      }
+    ],
+    rejectedReasons: [
+      "没有订单、客单和复购数据，不建议直接开第二家店",
+      "没有现场转化计数，不把附近业态或主观人流当作扩店证据",
+      "老板与家人劳动未计价，不把账面利润直接当作可自由支配利润"
+    ]
+  };
+}
+
+function startDemoAnalysis() {
+  setPanel("result");
+  $("analysisProgress").hidden = false;
+  $("result").hidden = true;
+  $("analysisTitle").textContent = "正在复核案例账目";
+  $("analysisStatus").textContent = "演示模式：正在生成 3 条候选并完成双重核验…";
+  $("analysisProgressBar").style.width = "22%";
+  document.querySelectorAll("#analysisSteps li").forEach((item, index) => item.classList.toggle("active", index === 0));
+  setTimeout(() => {
+    $("analysisTitle").textContent = "正在筛掉不该立刻做的动作";
+    $("analysisStatus").textContent = "优先保留低预算、可停止、可测量的实验。";
+    $("analysisProgressBar").style.width = "72%";
+  }, 850);
+  setTimeout(() => renderAnalysisResult(demoAnalysisResult()), 2000);
 }
 
 function startProgressAnimation() {
@@ -1985,53 +2227,25 @@ function resetFlow() {
 }
 
 function loadDemo() {
+  if (!DEMO_MODE) {
+    window.location.assign(DEMO_ORIGIN);
+    return;
+  }
+  state.demoPlaybackToken += 1;
   resetFlow();
-  state.stage = "operating";
-  state.locationConfirmed = true;
-  state.mapContextLoaded = true;
-  state.localMode = true;
-  state.caseId = `demo-${Date.now()}`;
-  state.locationCandidate = {
-    source: "demo", address: "杭州市西湖区文三路示例店", city: "杭州市", district: "西湖区", nearbyCount: 17, places: []
-  };
-  const demo = [
-    ["stage", "经营阶段", "text", "operating"],
-    ["location", "店铺位置", "text", "杭州市西湖区文三路示例店"],
-    ["category", "经营品类", "text", "快餐"],
-    ["goal", "经营目标", "text", "现在持续亏损，想知道该不该继续"],
-    ["monthlyRevenue", "月营业额", "money", 120000],
-    ["ordersDaily", "日订单量", "count", 95],
-    ["avgTicket", "平均客单价", "money", 42],
-    ["variableCostRate", "每百元变动成本", "rate", 55],
-    ["rent", "月租金及物业", "money", 18000],
-    ["labor", "月人工成本", "money", 42000],
-    ["ownerReplacementWage", "老板与家人替代工资", "money", 10000],
-    ["otherFixed", "其他月固定支出", "money", 12000],
-    ["cashReserve", "可用现金", "money", 80000],
-    ["debt", "店铺相关债务", "money", 60000],
-    ["staffCount", "长期工作人员", "count", 6],
-    ["trafficMatch", "目标客流匹配", "choice", "yes"],
-    ["visibility", "门头可见与可理解", "choice", "no"],
-    ["retention", "复购表现", "choice", "unknown"]
-  ];
-  state.facts = demo.map(([id, label, kind, value]) => ({
-    id, label, kind, value, range: null, status: value === "unknown" ? "unknown" : "confirmed",
-    field: id, source: "document", evidence: value === "unknown" ? "U" : "B",
-    evidenceGrade: value === "unknown" ? "U" : "B", raw: "", rawTranscript: "", updatedAt: new Date().toISOString()
-  }));
-  setPanel("result");
-  $("analysisProgress").hidden = false;
-  $("result").hidden = true;
-  startProgressAnimation();
-  setTimeout(() => {
-    stopProgressAnimation();
-    renderAnalysisResult(localAnalysis());
-  }, 2500);
+  configureDemoLanding();
 }
 
 document.querySelectorAll("[data-stage]").forEach((button) => {
   button.addEventListener("click", () => chooseStage(button.dataset.stage));
 });
+document.querySelectorAll("[data-category]").forEach((button) => {
+  button.addEventListener("click", () => {
+    $("category").value = button.dataset.category;
+    syncCategoryChips();
+  });
+});
+$("category").addEventListener("input", syncCategoryChips);
 $("locateButton").addEventListener("click", locateCurrentStore);
 $("useManualLocation").addEventListener("click", () => void useManualLocation());
 $("confirmLocation").addEventListener("click", confirmLocation);
@@ -2083,6 +2297,8 @@ $("fallbackAnswer").addEventListener("keydown", (event) => {
 $("startAnalysis").addEventListener("click", () => void startAnalysis());
 $("restartButton").addEventListener("click", resetFlow);
 $("loadDemoButton").addEventListener("click", loadDemo);
+
+configureDemoLanding();
 
 fetch("data/corpus_analysis.json")
   .then((response) => response.ok ? response.json() : Promise.reject())

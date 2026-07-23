@@ -22,7 +22,10 @@
         <span class="eyebrow">先算账，再行动</span>
         <h1>不用填表，<br><em>把店说清楚。</em></h1>
         <p>先确认店铺位置，再点一次开始。系统逐题听你回答、自动整理，最后把所有记录放在一页核对。</p>
-        <a class="primary-button" href="#judge" data-testid="hero-start">开始店铺问诊</a>
+        <div class="hero-actions">
+          <a class="primary-button" href="#judge" data-testid="hero-start">开始店铺问诊</a>
+          <a class="demo-button" href="https://demo.yongge.zhangyvjing.com" data-testid="hero-demo">体验 Demo 模式 <span>→</span></a>
+        </div>
       </div>
       <div class="hero-result">
         <small>最后得到的不是一篇空话</small>
@@ -69,8 +72,19 @@
             </div>
           </fieldset>
 
-          <label class="field">
-            <span>这家店卖什么？</span>
+          <fieldset class="category-picker">
+            <legend>这家店卖什么？</legend>
+            <div class="category-chips" aria-label="常见经营品类" data-testid="category-chips">
+              <button type="button" data-category="快餐">快餐</button>
+              <button type="button" data-category="小碗菜">小碗菜</button>
+              <button type="button" data-category="面馆">面馆</button>
+              <button type="button" data-category="咖啡">咖啡</button>
+              <button type="button" data-category="火锅">火锅</button>
+              <button type="button" data-category="烧烤">烧烤</button>
+            </div>
+          </fieldset>
+          <label class="field category-input-field">
+            <span>也可以直接输入品类</span>
             <input id="category" type="text" maxlength="30" placeholder="例如：咖啡、火锅、快餐" data-testid="category-input">
           </label>
 

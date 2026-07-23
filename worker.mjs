@@ -711,16 +711,20 @@ function cleanupMemoryStores() {
 
 function corsHeaders(request, env) {
   const requestOrigin = request.headers.get("Origin");
-  const allowed = env.APP_ORIGIN || new URL(request.url).origin;
+  const allowed = allowedOrigins(env, new URL(request.url).origin);
   const headers = {
     "Vary": "Origin",
     "Access-Control-Allow-Headers": "Content-Type, X-Case-Token",
     "Access-Control-Allow-Methods": "GET, POST, DELETE, OPTIONS"
   };
-  if (requestOrigin && requestOrigin === allowed) {
+  if (requestOrigin && allowed.has(requestOrigin)) {
     headers["Access-Control-Allow-Origin"] = requestOrigin;
   }
   return headers;
+}
+
+function allowedOrigins(env, requestOrigin) {
+  return new Set([env.APP_ORIGIN, env.DEMO_ORIGIN, requestOrigin].filter(Boolean));
 }
 
 function apiJson(request, env, body, status = 200) {
@@ -736,8 +740,7 @@ function originAllowed(request, env) {
   const origin = request.headers.get("Origin");
   if (!origin) return true;
   const requestUrl = new URL(request.url);
-  const expected = env.APP_ORIGIN || requestUrl.origin;
-  if (origin === expected) return true;
+  if (allowedOrigins(env, requestUrl.origin).has(origin)) return true;
   try {
     const originUrl = new URL(origin);
     const loopback = (hostname) => ["localhost", "127.0.0.1", "::1"].includes(hostname);

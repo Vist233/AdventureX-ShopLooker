@@ -362,6 +362,33 @@ def test_mobile_review_layout(browser, base_url: str) -> None:
     context.close()
 
 
+def test_subtitle_case_demo(browser, base_url: str) -> None:
+    context = browser.new_context(base_url=base_url, locale="zh-CN")
+    page = context.new_page()
+    errors = attach_error_collection(page)
+    page.goto("/?demo=1&demoSpeed=40", wait_until="domcontentloaded")
+    expect(page.locator("body")).to_have_class("demo-mode")
+    expect(page.locator("#category")).to_have_value("私房小碗菜")
+    expect(page.locator('[data-stage="operating"]')).to_have_class("selected")
+    page.locator("#locateButton").click()
+    expect(page.locator("#locationProof")).to_be_visible(timeout=3_000)
+    expect(page.locator("#mapAddress")).to_contain_text("稷山县")
+    page.locator("#beginInterview").click()
+    expect(page.locator('[data-panel="review"]')).to_be_visible(timeout=12_000)
+    rows = page.locator('[data-testid="fact-review-row"]')
+    expect(rows).to_have_count(19)
+    first_row = rows.first
+    first_row.locator('input[value="unknown"]').click(force=True)
+    expect(first_row).to_have_attribute("data-mode", "correct")
+    page.locator("#submitReview").click()
+    expect(page.locator("#result")).to_be_visible(timeout=4_000)
+    expect(page.locator("#decisionTitle")).to_contain_text("座位与外卖")
+    expect(page.locator(".plan-card")).to_have_count(3)
+    if errors:
+        raise AssertionError("Demo 页面产生错误：" + " | ".join(errors))
+    context.close()
+
+
 def main() -> None:
     with LocalSite() as site, sync_playwright() as playwright:
         browser = playwright.chromium.launch(headless=True)
@@ -369,9 +396,10 @@ def main() -> None:
             test_location_and_text_fallback(browser, site.url)
             test_gps_and_number_semantics(browser, site.url)
             test_mobile_review_layout(browser, site.url)
+            test_subtitle_case_demo(browser, site.url)
         finally:
             browser.close()
-    print("browser E2E: location, footfall, fallback, full review, mobile layout, Top3 and number semantics passed")
+    print("browser E2E: location, footfall, fallback, full review, mobile layout, subtitle demo, Top3 and number semantics passed")
 
 
 if __name__ == "__main__":
