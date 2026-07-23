@@ -48,7 +48,7 @@
 
 - **腾讯地图位置背景**：地址解析、行政区、附近地标和 800 米内同类 POI；真实门店入口仍由用户回答确认。
 - **阿里云语音识别**：浏览器端 VAD 以约 600 ms 静音切分回答，打包为 16 kHz、16-bit、单声道 WAV，再由 Worker 调用 DashScope `fun-asr-flash-2026-06-15` 的 HTTP 接口取得最终转写。该模型不承担服务端 VAD，也不接收持续 WebSocket 音频。
-- **StepFun 语音播报**：`stepaudio-2.5-tts`；语音不可用时仍保留屏幕文字和浏览器播报。
+- **阿里云语音播报**：`qwen3-tts-instruct-flash`，使用 `Serena` 音色及“温柔、自然、有专业感”的指令；语音不可用时仍保留屏幕文字和浏览器播报。
 - **StepFun 动态追问**：程序策略决定必问字段、顺序、每字段最多两问及完成条件；`step-3.7-flash` 提取候选事实和矛盾，并为程序指定字段生成不超过 30 字的问法；在线追问最多等待 7 秒，超时即用确定性问题继续；最多问诊 30 轮。
 - **一屏事实查证**：全部事实同时显示；用户逐项确认、标记未知或编辑原话，系统重新解析编辑内容后一次提交。纠偏阶段不再语音重问。
 - **可审计事实档案**：保留值或范围、单位、周期、状态、来源、证据等级、原始转写和更新时间；档案整体带有案卷版本。
@@ -124,6 +124,7 @@ node test_interview_policy.js
 node test_server_decision_adapter.mjs
 node test_stepfun_client.mjs
 node test_dashscope_asr_client.mjs
+node test_dashscope_tts_client.mjs
 node test_agent_orchestrator.js
 node test_worker.mjs
 
@@ -133,14 +134,16 @@ python test_location_e2e.py
 
 `test_location_e2e.py` 是浏览器 E2E：它模拟地图和案卷 API，并故意拒绝麦克风权限，验证“位置确认 → 一次启动问诊 → 文字降级 → 全量事实查证 → Top 3”不会卡死；它还检查全部查证项同时可见、一次提交、编辑原话后重新解析，以及“毛利 45%”“12 万一年”“10 到 12 万”等口径。
 
-`test_dashscope_asr_client.mjs` 验证 DashScope 请求格式、WAV Data URI、鉴权头和两种转写响应结构；`test_worker.mjs` 验证受保护的单轮 ASR HTTP 接口。真实 StepFun 文本模型与 TTS 可用 `node test_stepfun_live.mjs` 验证；腾讯地图可用 `node test_worker_live.mjs` 验证。真实 ASR 调用应在当前 shell 或 Worker Secret 中安全提供 `DASHSCOPE_API_KEY`。不要把任何密钥写进命令历史或提交记录。
+`test_dashscope_asr_client.mjs` 验证 DashScope ASR 请求格式、WAV Data URI、鉴权头和两种转写响应结构；`test_dashscope_tts_client.mjs` 验证 Qwen TTS 的指令、音色、鉴权与音频解码；`test_worker.mjs` 验证受保护的单轮 ASR 与 TTS HTTP 接口。真实 StepFun 仅用于文本 Agent；腾讯地图可用 `node test_worker_live.mjs` 验证。真实语音调用应在当前 shell 或 Worker Secret 中安全提供 `DASHSCOPE_API_KEY`。不要把任何密钥写进命令历史或提交记录。
 
 真实 ASR 可分别验证供应商接口和已部署 Worker 代理：
 
 ```bash
 pyenv shell Agent
 python test_dashscope_asr_live.py
+node test_dashscope_tts_live.mjs
 node test_production_asr.mjs
+node test_production_tts.mjs
 ```
 
 生产全链路验收会真实消费一次完整 Agent 分析及当日配额：
@@ -179,7 +182,7 @@ wrangler secret put DASHSCOPE_API_KEY --config wrangler.toml
 wrangler secret put TENCENT_MAP_KEY --config wrangler.toml
 ```
 
-`STEPFUN_API_KEY` 只供文本 Agent 和 TTS 使用；`DASHSCOPE_API_KEY` 只供 `fun-asr-flash-2026-06-15` 使用。也可以使用 `STEPFUN_API_KEYS` 保存由服务端轮换的 StepFun 密钥池。只能配置单个 StepFun Key 或 Key 池中的一种来源；所有密钥值都不得进入前端、Git 或日志。
+`STEPFUN_API_KEY` 只供文本 Agent 使用；`DASHSCOPE_API_KEY` 同时供 `fun-asr-flash-2026-06-15` 与 `qwen3-tts-instruct-flash` 使用。也可以使用 `STEPFUN_API_KEYS` 保存由服务端轮换的 StepFun 文本 Key 池。只能配置单个 StepFun Key 或 Key 池中的一种来源；所有密钥值都不得进入前端、Git 或日志。
 
 腾讯地图 Key 需要启用 WebService API。如果腾讯控制台启用了域名白名单，应授权生产域名；Worker 会以生产站点为来源请求地图服务。
 

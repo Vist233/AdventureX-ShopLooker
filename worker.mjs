@@ -1,5 +1,6 @@
 import { StepFunClient } from "./stepfun-client.js";
 import { DashScopeAsrClient } from "./dashscope-asr-client.js";
+import { DashScopeTtsClient } from "./dashscope-tts-client.js";
 import {
   createSearchState,
   finalizeAgentSearch,
@@ -1801,9 +1802,9 @@ async function ttsResponse(request, env) {
     }, 400);
   }
   const record = await requireCase(request, env, caseId);
-  const client = new StepFunClient(env);
+  const client = new DashScopeTtsClient(env);
   if (!client.configured) {
-    return apiJson(request, env, { code: "STEPFUN_NOT_CONFIGURED", message: "语音服务尚未配置" }, 503);
+    return apiJson(request, env, { code: "DASHSCOPE_TTS_NOT_CONFIGURED", message: "语音服务尚未配置" }, 503);
   }
   if (!await consumeTtsQuota(env, record)) {
     return apiJson(request, env, {
@@ -1811,14 +1812,13 @@ async function ttsResponse(request, env) {
       message: `每个案卷最多合成${MAX_TTS_PER_CASE}次语音`
     }, 429);
   }
-  const response = await client.tts(body.text, {
-    voice: cleanText(body.voice, 40) || undefined,
-    speed: 1.18
+  const audio = await client.synthesize(body.text, {
+    voice: cleanText(body.voice, 40) || undefined
   });
-  const headers = new Headers(response.headers);
+  const headers = new Headers({ "Content-Type": audio.contentType });
   headers.set("Cache-Control", "private, no-store");
   Object.entries(corsHeaders(request, env)).forEach(([key, value]) => headers.set(key, value));
-  return new Response(response.body, { status: response.status, headers });
+  return new Response(audio.body, { status: 200, headers });
 }
 
 function isWavFile(buffer) {

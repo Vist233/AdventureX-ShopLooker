@@ -30,6 +30,13 @@ globalThis.fetch = async (input, init = {}) => {
   }
 
   if (url.hostname === "dashscope.aliyuncs.com") {
+    const body = JSON.parse(init.body || "{}");
+    if (body.model === "qwen3-tts-instruct-flash") {
+      return Response.json({
+        output: { audio: { data: Buffer.from("RIFFdemo-wav").toString("base64"), format: "wav" } },
+        request_id: "dashscope-tts-test"
+      });
+    }
     return Response.json({
       output: { text: "Hello World，这里是阿里巴巴语音实验室。" },
       request_id: "dashscope-request-test"
@@ -629,7 +636,7 @@ try {
   });
   assert.equal(ttsWithoutCase.status, 400);
 
-  env.STEPFUN_API_KEY = "server-only-key";
+  env.DASHSCOPE_API_KEY = "server-only-key";
   for (let index = 0; index < 40; index += 1) {
     const response = await apiRequest("/api/tts", {
       method: "POST",
@@ -637,6 +644,7 @@ try {
       body: { caseId: created.case.id, text: `第${index + 1}次播报` }
     });
     assert.equal(response.status, 200, `TTS request ${index + 1} should be allowed`);
+    assert.equal(response.headers.get("Content-Type"), "audio/wav");
   }
   const ttsOverQuota = await apiRequest("/api/tts", {
     method: "POST",
@@ -699,9 +707,13 @@ try {
   const policyPayload = await committedPolicyTurn.json();
   assert.equal(policyPayload.nextQuestion.field, "category");
   assert.equal(rejectedConcurrentTurn.status, 409);
-  assert.equal((await rejectedConcurrentTurn.json()).code, "TURN_IN_PROGRESS");
+  // Depending on whether the initial turn has released its lock just before
+  // the competing request reaches the Worker, a stale request is rejected by
+  // the in-progress lock or by the version CAS. Both protect the same fact
+  // snapshot and must remain a 409 rather than overwriting the case.
+  assert.ok(["TURN_IN_PROGRESS", "CASE_VERSION_CONFLICT"].includes((await rejectedConcurrentTurn.json()).code));
   assert.equal(rejectedConcurrentReview.status, 409);
-  assert.equal((await rejectedConcurrentReview.json()).code, "TURN_IN_PROGRESS");
+  assert.ok(["TURN_IN_PROGRESS", "CASE_VERSION_CONFLICT"].includes((await rejectedConcurrentReview.json()).code));
   delete env.STEPFUN_API_KEY;
 
   const missingPlanResponse = await apiRequest(

@@ -15,7 +15,10 @@ for source_file in \
   server-decision-adapter.mjs \
   worker.mjs \
   dashscope-asr-client.js \
+  dashscope-tts-client.js \
+  test_dashscope_tts_live.mjs \
   test_production_asr.mjs \
+  test_production_tts.mjs \
   stepfun-client.js \
   agent-orchestrator.js
 do
@@ -27,6 +30,7 @@ node test_decision_engine.js
 node test_interview_policy.js
 node test_server_decision_adapter.mjs
 node test_dashscope_asr_client.mjs
+node test_dashscope_tts_client.mjs
 node test_stepfun_client.mjs
 node test_agent_orchestrator.js
 node test_worker.mjs
@@ -35,6 +39,9 @@ node test_worker.mjs
 # Run with RUN_DASHSCOPE_LIVE_ASR=1 when validating credentials or the model.
 if [[ "${RUN_DASHSCOPE_LIVE_ASR:-0}" == "1" ]]; then
   python test_dashscope_asr_live.py
+fi
+if [[ "${RUN_DASHSCOPE_LIVE_TTS:-0}" == "1" ]]; then
+  node test_dashscope_tts_live.mjs
 fi
 
 python build_site.py

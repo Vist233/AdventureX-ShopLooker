@@ -19,7 +19,7 @@ flowchart TD
   I --> VAD["浏览器 VAD + 单轮 WAV"]
   VAD --> ASR["DashScope Fun-ASR-Flash HTTP"]
   ASR --> Q["单一问题调度 Agent"]
-  Q --> TTS["StepFun TTS + 屏幕短问题"]
+  Q --> TTS["Qwen Instruct TTS + 屏幕短问题"]
   Q --> F["候选事实档案"]
   F --> R["第三屏：一屏全量事实查证"]
   R --> CF["已确认事实档案"]
@@ -63,7 +63,7 @@ IP 位置只允许预填城市，不返回店铺坐标，也不能直接解锁�
 
 问题由一个调度 Agent 负责，不让多个 Agent 同时对用户说话。程序中的 `interview-policy` 决定经营阶段对应的必问字段、字段顺序、每字段最多两问、总轮数和完成条件；Agent 只提取事实与矛盾，并为程序指定字段生成不超过 30 个汉字的口语问题。在线追问调用有 7 秒演示级时限；超时后由确定性策略立即进入下一字段，缺失事实留到全量事实查证页处理。
 
-播报使用 `stepaudio-2.5-tts`。TTS 播放期间麦克风轨道仍保留，但客户端暂停收集用于下一段 ASR 的音频；结束后恢复。因此这是“一次启动、持续会话、轮流说话”，不是多人同声分离，也默认不支持用户打断 AI。
+播报使用 `qwen3-tts-instruct-flash`，固定 `Serena` 音色与“温柔、自然、有专业感的年轻女声”指令。TTS 播放期间麦克风轨道仍保留，但客户端暂停收集用于下一段 ASR 的音频；结束后恢复。因此这是“一次启动、持续会话、轮流说话”，不是多人同声分离，也默认不支持用户打断 AI。
 
 ### 3.3 全量事实查证屏
 
@@ -88,10 +88,10 @@ Demo 不调用腾讯地图、ASR、D1 案卷或付费 Agent；没有出现在字
 |职责|模型|调用方式|
 |---|---|---|
 |问题调度、事实抽取、方案生成与核验、结果解释|`step-3.7-flash`|Worker HTTP，强制 JSON 输出|
-|问题播报|`stepaudio-2.5-tts`|Worker HTTP 音频代理|
+|问题播报|`qwen3-tts-instruct-flash`|DashScope HTTP；`Serena` + 指令控制|
 |单轮回答转写|`fun-asr-flash-2026-06-15`|DashScope HTTP，完整 WAV Data URI|
 
-`StepFunClient` 只负责文本 Agent 与 TTS，并只在服务端读取 StepFun Key。结构化文本结果为空、截断或 JSON 不合法时会再尝试一次，并要求模型只返回完整 JSON；推理内容不能被当成最终结构化结果。`DashScopeAsrClient` 独立读取 `DASHSCOPE_API_KEY`，浏览器不能接触任何模型密钥。
+`StepFunClient` 只负责文本 Agent，并只在服务端读取 StepFun Key。结构化文本结果为空、截断或 JSON 不合法时会再尝试一次，并要求模型只返回完整 JSON；推理内容不能被当成最终结构化结果。`DashScopeAsrClient` 与 `DashScopeTtsClient` 读取同一个 `DASHSCOPE_API_KEY`，浏览器不能接触任何模型密钥。
 
 ### 4.2 音频生命周期
 
@@ -114,7 +114,7 @@ DashScope ASR
 → 失败：浏览器 SpeechRecognition
 → 再失败或权限拒绝：文字回答
 
-StepFun TTS
+Qwen Instruct TTS
 → 失败：浏览器 speechSynthesis
 → 再失败：始终可见的屏幕文字
 ```
@@ -233,7 +233,7 @@ Worker 负责：
 
 - 静态站点；
 - 腾讯地图服务端代理；
-- StepFun TTS HTTP 代理与 DashScope 单段 WAV HTTP 代理；
+- Qwen Instruct TTS HTTP 代理与 DashScope 单段 WAV HTTP 代理；
 - 案卷鉴权、同源检查和限流；
 - 问诊轮次与事实版本；
 - 分析任务创建、进度读取、方案选择和案卷删除。
@@ -280,7 +280,7 @@ POST   /api/tts
 |腾讯地图失败或未配置|接受用户确认的文字位置，明确标注地图未参与|
 |麦克风拒绝|直接切换文字问诊|
 |DashScope ASR 失败|浏览器语音识别，再失败则文字问诊|
-|StepFun TTS 失败|浏览器播报；至少保留屏幕问题|
+|Qwen Instruct TTS 失败|浏览器播报；至少保留屏幕问题|
 |问题调度模型失败|固定问题库继续覆盖经营维度|
 |Agent 方案搜索失败|保留确定性判断并输出低成本补证据方案|
 |Queue 单轮失败|自动重试；耗尽后进入 DLQ|
@@ -297,12 +297,13 @@ POST   /api/tts
 |确定性引擎|`node test_decision_engine.js`|决策闸门、保守计算、关键事实不足|
 |问诊策略|`node test_interview_policy.js`|阶段必问字段、两次拆问、30 轮上限、短问题|
 |服务端适配|`node test_server_decision_adapter.mjs`|忽略客户端计算、服务端重算与完整性判定|
-|StepFun 客户端|`node test_stepfun_client.mjs`|结构化输出、重试、TTS 代理|
+|StepFun 文本客户端|`node test_stepfun_client.mjs`|结构化输出与重试|
 |DashScope ASR 客户端|`node test_dashscope_asr_client.mjs`|鉴权、WAV Data URI、请求格式与响应解析|
+|DashScope TTS 客户端|`node test_dashscope_tts_client.mjs`|指令、Serena 音色、鉴权与音频解码|
 |Agent 搜索|`node test_agent_orchestrator.js`|3 候选、每个双核验、并发不超过 3、硬上限 3|
 |Worker|`node test_worker.mjs`|地图、案卷、鉴权、单轮 WAV ASR、AgentGate|
 |浏览器 E2E|`python test_location_e2e.py`|位置、一次启动、降级、全量查证、一次提交和数字口径|
-|真实 StepFun 文本/TTS|`node test_stepfun_live.mjs`|真实 JSON 文本调用和 MP3 返回|
+|真实 StepFun 文本|`node test_stepfun_live.mjs`|真实 JSON 文本调用|
 |真实腾讯地图|`node test_worker_live.mjs`|真实地址与周边接口|
 |生产 ASR 冒烟|`node test_production_asr.mjs`|真实 Worker Secret、二进制 WAV 上传与 Fun-ASR-Flash 返回|
 |生产全链路|`python test_production_e2e.py --confirm-paid-analysis`|生产静态页、地图、TTS、事实纠偏、付费 3 方案搜索、方案执行与删除|
