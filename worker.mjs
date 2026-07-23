@@ -1,4 +1,5 @@
 import { StepFunClient } from "./stepfun-client.js";
+import { DashScopeAsrClient } from "./dashscope-asr-client.js";
 import {
   createSearchState,
   finalizeAgentSearch,
@@ -34,6 +35,7 @@ const QUEUE_MAX_RETRIES = 3;
 const MAX_ASR_SESSIONS_PER_CASE = 3;
 const MAX_ASR_SESSION_MS = 20 * 60 * 1000;
 const MAX_ASR_AUDIO_BYTES = 40 * 1024 * 1024;
+const MAX_ASR_CLIP_BYTES = 3 * 1024 * 1024;
 export const ASR_SILENCE_DURATION_MS = 600;
 const DAILY_WINDOW_MS = 26 * 60 * 60 * 1000;
 const SEARCH_TARGET = 3;
@@ -47,7 +49,7 @@ const ACTION_RATE_LIMITS = {
   tts: { limit: 60, windowMs: 60 * 1000 },
   turn: { limit: 40, windowMs: 60 * 1000 },
   analyze: { limit: 5, windowMs: 10 * 60 * 1000 },
-  "asr-connect": { limit: 6, windowMs: 60 * 60 * 1000 }
+  "asr-transcribe": { limit: 40, windowMs: 60 * 60 * 1000 }
 };
 
 export class AgentGate {
@@ -754,7 +756,7 @@ function rateAction(request, url) {
   if (request.method === "POST" && url.pathname === "/api/tts") return "tts";
   if (request.method === "POST" && /^\/api\/cases\/[^/]+\/turns$/.test(url.pathname)) return "turn";
   if (request.method === "POST" && /^\/api\/cases\/[^/]+\/analyze$/.test(url.pathname)) return "analyze";
-  if (request.method === "GET" && /^\/api\/cases\/[^/]+\/interview$/.test(url.pathname)) return "asr-connect";
+  if (request.method === "POST" && /^\/api\/cases\/[^/]+\/asr$/.test(url.pathname)) return "asr-transcribe";
   return "";
 }
 
@@ -1178,6 +1180,14 @@ async function interviewTurn(request, env, caseId) {
 async function reviewFacts(request, env, caseId) {
   const record = await requireCase(request, env, caseId);
   const body = await readJson(request);
+  const requestedVersion = Number(body.caseVersion);
+  if (Number.isFinite(requestedVersion) && requestedVersion !== record.version) {
+    return apiJson(request, env, {
+      code: "CASE_VERSION_CONFLICT",
+      message: "案卷已发生变化，请刷新事实后再提交",
+      version: record.version
+    }, 409);
+  }
   const corrections = Array.isArray(body.corrections)
     ? body.corrections.slice(0, 80)
     : Array.isArray(body.facts)
@@ -1191,13 +1201,14 @@ async function reviewFacts(request, env, caseId) {
     const id = cleanText(correction.id, 60);
     if (!id) continue;
     const existing = record.facts[id] || { id, field: id };
+    const source = correction.source === "typed" ? "typed" : "choice";
     const normalized = normalizeFact({
       ...existing,
       ...correction,
       id,
-      source: "choice",
+      source,
       evidence: correction.status === "unknown" ? "U" : "B"
-    }, "choice");
+    }, source);
     if (normalized && !equivalentFact(existing, normalized)) {
       record.facts[id] = normalized;
       changed += 1;
@@ -1734,6 +1745,76 @@ async function ttsResponse(request, env) {
   return new Response(response.body, { status: response.status, headers });
 }
 
+function isWavFile(buffer) {
+  if (!(buffer instanceof ArrayBuffer) || buffer.byteLength < 44) return false;
+  const bytes = new Uint8Array(buffer, 0, Math.min(buffer.byteLength, 12));
+  return String.fromCharCode(...bytes.slice(0, 4)) === "RIFF"
+    && String.fromCharCode(...bytes.slice(8, 12)) === "WAVE";
+}
+
+async function dashScopeAsrResponse(request, env, caseId) {
+  const record = await requireCase(request, env, caseId);
+  const contentType = String(request.headers.get("Content-Type") || "").toLowerCase();
+  if (!contentType.startsWith("audio/wav") && !contentType.startsWith("audio/x-wav")) {
+    return apiJson(request, env, {
+      code: "ASR_AUDIO_FORMAT_INVALID",
+      message: "语音识别只接受16kHz单声道WAV片段"
+    }, 415);
+  }
+  const declaredLength = Number(request.headers.get("Content-Length") || 0);
+  if (declaredLength > MAX_ASR_CLIP_BYTES) {
+    return apiJson(request, env, {
+      code: "ASR_AUDIO_TOO_LARGE",
+      message: "单次回答最长约60秒，请缩短后再试"
+    }, 413);
+  }
+  const audio = await request.arrayBuffer();
+  if (audio.byteLength > MAX_ASR_CLIP_BYTES) {
+    return apiJson(request, env, {
+      code: "ASR_AUDIO_TOO_LARGE",
+      message: "单次回答最长约60秒，请缩短后再试"
+    }, 413);
+  }
+  if (!isWavFile(audio)) {
+    return apiJson(request, env, {
+      code: "ASR_AUDIO_INVALID",
+      message: "没有收到有效WAV语音片段"
+    }, 422);
+  }
+
+  const client = new DashScopeAsrClient(env);
+  if (!client.configured) {
+    return apiJson(request, env, {
+      code: "DASHSCOPE_NOT_CONFIGURED",
+      message: "阿里云语音识别尚未配置"
+    }, 503);
+  }
+  const prior = record.turns
+    .slice(-3)
+    .map((turn) => trimText(turn.transcript, 80))
+    .filter(Boolean)
+    .join("；");
+  const context = [
+    "餐饮经营词表：营业额、流水、毛利率、变动成本、客单价、房租、人工、现金、债务、客流、门头、转让费、加盟费。",
+    `当前问题：${trimText(record.currentQuestion?.text, 100)}`,
+    prior ? `前文：${prior}` : ""
+  ].filter(Boolean).join("\n").slice(0, 380);
+
+  try {
+    const result = await client.transcribe(audio, { context, timeoutMs: 25_000 });
+    return apiJson(request, env, {
+      text: result.text,
+      requestId: result.requestId,
+      model: result.model
+    });
+  } catch (error) {
+    return apiJson(request, env, {
+      code: "DASHSCOPE_ASR_FAILED",
+      message: error instanceof Error ? error.message : "阿里云语音识别失败"
+    }, 502);
+  }
+}
+
 export function asrSessionConfig(env = {}) {
   return {
     type: "session.update",
@@ -1978,7 +2059,13 @@ async function routeCases(request, env, ctx, url) {
   if (!caseId) return null;
   if (request.method === "POST" && parts[3] === "location") return saveLocation(request, env, caseId);
   if (request.method === "POST" && parts[3] === "turns") return interviewTurn(request, env, caseId);
-  if (request.method === "GET" && parts[3] === "interview") return asrRelay(request, env, caseId, ctx);
+  if (request.method === "POST" && parts[3] === "asr") return dashScopeAsrResponse(request, env, caseId);
+  if (request.method === "GET" && parts[3] === "interview") {
+    return apiJson(request, env, {
+      code: "ASR_PROTOCOL_RETIRED",
+      message: "StepFun WebSocket ASR已停用，请使用阿里云短音频识别"
+    }, 410);
+  }
   if (request.method === "POST" && parts[3] === "review") return reviewFacts(request, env, caseId);
   if (request.method === "POST" && parts[3] === "analyze") return startAnalysis(request, env, caseId, ctx);
   if (request.method === "GET" && parts[3] === "runs" && parts[4]) {

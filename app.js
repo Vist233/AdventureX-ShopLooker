@@ -1,11 +1,12 @@
 const $ = (id) => document.getElementById(id);
 const money = new Intl.NumberFormat("zh-CN", { maximumFractionDigits: 0 });
 const FLOW_ORDER = ["location", "interview", "review", "result"];
-// Keep the question hand-off fast enough for a live demo. StepFun owns the
-// first 600 ms silence window; this small client window only catches a final
-// segment that is immediately followed by speech_started/a second final.
-const REMOTE_VAD_SILENCE_MS = 600;
-const REMOTE_FINAL_SETTLE_MS = 250;
+// fun-asr-flash accepts a complete short audio file rather than a live stream.
+// The microphone stays open, while this client-side VAD cuts one answer after
+// a short silence and sends only that in-memory WAV file to the Worker.
+const LOCAL_VAD_SILENCE_MS = 600;
+const LOCAL_VAD_PRE_ROLL_MS = 280;
+const LOCAL_VAD_MAX_SEGMENT_MS = 60_000;
 
 const state = {
   panel: "location",
@@ -28,16 +29,12 @@ const state = {
     mode: "pending",
     transcript: "",
     noSpeechCount: 0,
-    reaskFactId: null,
-    pendingFinalTimer: null,
-    pendingTranscript: "",
-    pendingItemId: "",
-    submitInFlight: false
+    submitInFlight: false,
+    asrController: null
   },
   facts: [],
   transcripts: [],
-  reviewIndex: 0,
-  ws: null,
+  reviewSubmitted: false,
   audio: null,
   recognition: null,
   analysisTimer: null,
@@ -566,11 +563,19 @@ function caseHeaders(extra = {}) {
 }
 
 class ContinuousAudio {
-  constructor() {
+  constructor(onSegment = null) {
     this.stream = null;
     this.context = null;
     this.processor = null;
     this.sendEnabled = false;
+    this.onSegment = onSegment;
+    this.preRoll = [];
+    this.segmentChunks = [];
+    this.preRollSamples = 0;
+    this.segmentSamples = 0;
+    this.speechDetected = false;
+    this.silenceMs = 0;
+    this.noiseFloor = 0.004;
   }
 
   async start() {
@@ -587,22 +592,91 @@ class ContinuousAudio {
     const silent = this.context.createGain();
     silent.gain.value = 0;
     this.processor.onaudioprocess = (event) => {
-      if (!this.sendEnabled || !state.ws || state.ws.readyState !== WebSocket.OPEN) return;
+      if (!this.sendEnabled) return;
       const mono = event.inputBuffer.getChannelData(0);
       const samples = downsample(mono, this.context.sampleRate, 16000);
-      const pcm = floatToPcm16(samples);
-      state.ws.send(JSON.stringify({
-        type: "input_audio_buffer.append",
-        audio: arrayBufferToBase64(pcm)
-      }));
+      this.consume(samples);
     };
     source.connect(this.processor);
     this.processor.connect(silent);
     silent.connect(this.context.destination);
   }
 
+  consume(samples) {
+    const frame = new Float32Array(samples);
+    const frameMs = (frame.length / 16000) * 1000;
+    let energy = 0;
+    for (const sample of frame) energy += sample * sample;
+    const rms = Math.sqrt(energy / Math.max(1, frame.length));
+
+    if (!this.speechDetected) {
+      this.noiseFloor = (this.noiseFloor * 0.96) + (Math.min(rms, 0.03) * 0.04);
+      this.preRoll.push(frame);
+      this.preRollSamples += frame.length;
+      const maxPreRoll = Math.round((LOCAL_VAD_PRE_ROLL_MS / 1000) * 16000);
+      while (this.preRollSamples > maxPreRoll && this.preRoll.length > 1) {
+        this.preRollSamples -= this.preRoll.shift().length;
+      }
+    }
+
+    const threshold = Math.max(0.012, this.noiseFloor * 2.8);
+    const hasVoice = rms >= threshold;
+    let startedNow = false;
+    if (hasVoice) {
+      if (!this.speechDetected) {
+        startedNow = true;
+        this.speechDetected = true;
+        this.segmentChunks.push(...this.preRoll);
+        this.segmentSamples += this.preRollSamples;
+        this.preRoll = [];
+        this.preRollSamples = 0;
+        setListening("live", "正在听你说话");
+      }
+      this.silenceMs = 0;
+    } else if (this.speechDetected) {
+      this.silenceMs += frameMs;
+    }
+
+    if (this.speechDetected && !startedNow) {
+      this.segmentChunks.push(frame);
+      this.segmentSamples += frame.length;
+      const durationMs = (this.segmentSamples / 16000) * 1000;
+      if (this.silenceMs >= LOCAL_VAD_SILENCE_MS || durationMs >= LOCAL_VAD_MAX_SEGMENT_MS) {
+        this.finishSegment();
+      }
+    }
+  }
+
+  finishSegment() {
+    if (!this.speechDetected || this.segmentSamples < 1600) {
+      this.resetSegment();
+      return;
+    }
+    const pcm = new Float32Array(this.segmentSamples);
+    let offset = 0;
+    for (const chunk of this.segmentChunks) {
+      pcm.set(chunk, offset);
+      offset += chunk.length;
+    }
+    const wav = floatSamplesToWav(pcm, 16000);
+    this.sendEnabled = false;
+    this.resetSegment();
+    if (typeof this.onSegment === "function") void this.onSegment(wav);
+  }
+
+  resetSegment() {
+    this.preRoll = [];
+    this.segmentChunks = [];
+    this.preRollSamples = 0;
+    this.segmentSamples = 0;
+    this.speechDetected = false;
+    this.silenceMs = 0;
+  }
+
   setSending(enabled) {
-    this.sendEnabled = Boolean(enabled);
+    const next = Boolean(enabled);
+    if (next !== this.sendEnabled) this.resetSegment();
+    this.sendEnabled = next;
   }
 
   stop() {
@@ -613,6 +687,7 @@ class ContinuousAudio {
     this.processor = null;
     this.stream = null;
     this.context = null;
+    this.resetSegment();
   }
 }
 
@@ -641,139 +716,75 @@ function floatToPcm16(samples) {
   return output;
 }
 
-function arrayBufferToBase64(buffer) {
-  const bytes = new Uint8Array(buffer);
-  let binary = "";
-  const chunk = 0x8000;
-  for (let offset = 0; offset < bytes.length; offset += chunk) {
-    binary += String.fromCharCode(...bytes.subarray(offset, offset + chunk));
-  }
-  return btoa(binary);
-}
-
-function webSocketUrl(caseId) {
-  const protocol = location.protocol === "https:" ? "wss:" : "ws:";
-  const token = encodeURIComponent(state.caseToken || "");
-  return `${protocol}//${location.host}/api/cases/${encodeURIComponent(caseId)}/interview?token=${token}`;
-}
-
-async function connectInterviewSocket() {
-  if (state.localMode) return false;
-  return new Promise((resolve) => {
-    let settled = false;
-    const socket = new WebSocket(webSocketUrl(state.caseId));
-    socket.binaryType = "arraybuffer";
-    const timer = setTimeout(() => {
-      if (settled) return;
-      settled = true;
-      socket.close();
-      resolve(false);
-    }, 4500);
-    socket.onopen = () => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      state.ws = socket;
-      socket.send(JSON.stringify({
-        type: "session.start",
-        caseVersion: state.caseVersion,
-        audio: { format: "pcm16", sampleRate: 16000, vadSilenceMs: REMOTE_VAD_SILENCE_MS },
-        facts: state.facts
-      }));
-      resolve(true);
-    };
-    socket.onmessage = (event) => {
-      if (typeof event.data !== "string") return;
-      let message;
-      try { message = JSON.parse(event.data); } catch (_) { return; }
-      handleServerEvent(message);
-    };
-    socket.onclose = () => {
-      if (!state.interview.complete && state.interview.active && !state.localMode) activateLocalFallback("语音连接中断，已切换到本机问诊。");
-    };
-    socket.onerror = () => {
-      if (!settled) {
-        settled = true;
-        clearTimeout(timer);
-        resolve(false);
-      }
-    };
-  });
-}
-
-function handleServerEvent(message) {
-  const type = message.type || "";
-  if (type === "input_audio_buffer.speech_started" || type === "speech_started") {
-    if (state.interview.pendingFinalTimer) {
-      clearTimeout(state.interview.pendingFinalTimer);
-      state.interview.pendingFinalTimer = null;
+function floatSamplesToWav(samples, sampleRate = 16000) {
+  const pcm = floatToPcm16(samples);
+  const output = new ArrayBuffer(44 + pcm.byteLength);
+  const view = new DataView(output);
+  const write = (offset, value) => {
+    for (let index = 0; index < value.length; index += 1) {
+      view.setUint8(offset + index, value.charCodeAt(index));
     }
-    setListening("live", "正在听你继续说");
-    return;
-  }
-  if (type === "transcript.delta" || type === "conversation.item.input_audio_transcription.delta") {
-    const delta = message.text ?? message.delta ?? "";
-    state.interview.transcript = message.text != null
-      ? message.text
-      : `${state.interview.transcript}${delta}`;
-    const visible = [state.interview.pendingTranscript, state.interview.transcript]
-      .filter(Boolean)
-      .join(" ");
-    $("liveTranscript").textContent = visible || "正在听…";
-    return;
-  }
-  if (type === "transcript.final" || type === "conversation.item.input_audio_transcription.completed") {
-    scheduleRemoteFinal(message);
-    return;
-  }
-  if (type === "question") {
-    askQuestion({ id: message.factId, text: message.text, kind: message.kind, label: message.label }, message.index);
-    return;
-  }
-  if (type === "interview.complete") {
-    if (Array.isArray(message.facts)) message.facts.forEach(upsertFact);
-    finishInterview();
-    return;
-  }
-  if (type === "error") {
-    $("interviewNotice").textContent = message.message || "语音服务出现问题，已保留现有答案。";
-  }
+  };
+  write(0, "RIFF");
+  view.setUint32(4, 36 + pcm.byteLength, true);
+  write(8, "WAVE");
+  write(12, "fmt ");
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, 1, true);
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate * 2, true);
+  view.setUint16(32, 2, true);
+  view.setUint16(34, 16, true);
+  write(36, "data");
+  view.setUint32(40, pcm.byteLength, true);
+  new Uint8Array(output, 44).set(new Uint8Array(pcm));
+  return output;
 }
 
-function scheduleRemoteFinal(message) {
-  const finalText = String(message.text || message.transcript || "").trim();
-  if (!finalText || !state.interview.active) return;
-  const itemId = String(message.item_id || message.itemId || message.turnId || message.event_id || "");
-  const sameItem = itemId && itemId === state.interview.pendingItemId;
-  if (sameItem || !state.interview.pendingTranscript) {
-    state.interview.pendingTranscript = finalText;
-  } else if (!state.interview.pendingTranscript.includes(finalText)) {
-    state.interview.pendingTranscript = `${state.interview.pendingTranscript} ${finalText}`.trim();
-  }
-  state.interview.pendingItemId = itemId;
-  state.interview.transcript = finalText;
-  $("liveTranscript").textContent = state.interview.pendingTranscript;
-  if (state.interview.pendingFinalTimer) clearTimeout(state.interview.pendingFinalTimer);
+async function transcribeRecordedAnswer(wavBuffer) {
+  if (!state.interview.active || state.interview.paused || !state.caseId || !state.caseToken) return;
   const snapshot = {
     turnId: state.interview.turnId,
     questionId: $("currentQuestion").dataset.factId,
     question: $("currentQuestion").textContent,
     caseVersion: state.caseVersion
   };
-  // StepFun can emit a final segment and immediately reopen VAD when the user
-  // only paused briefly. Keep a short merge window instead of submitting on
-  // the same tick; speech_started cancels this timer and the next final is
-  // appended to the same answer.
-  state.interview.pendingFinalTimer = setTimeout(() => {
-    state.interview.pendingFinalTimer = null;
-    if (!state.interview.active || state.interview.paused || state.interview.submitInFlight) return;
-    const transcript = state.interview.pendingTranscript.trim();
-    state.interview.pendingTranscript = "";
-    state.interview.pendingItemId = "";
-    if (!transcript) return;
+  state.interview.asrController?.abort();
+  const controller = new AbortController();
+  state.interview.asrController = controller;
+  const timer = setTimeout(() => controller.abort(), 25_000);
+  setListening("", "阿里云正在识别");
+  $("liveTranscript").textContent = "回答已结束，正在识别…";
+  try {
+    const response = await fetch(`/api/cases/${encodeURIComponent(state.caseId)}/asr`, {
+      method: "POST",
+      headers: caseHeaders({
+        "Content-Type": "audio/wav",
+        "Accept": "application/json",
+        "X-Turn-Id": snapshot.turnId,
+        "X-Case-Version": String(snapshot.caseVersion)
+      }),
+      body: wavBuffer,
+      signal: controller.signal
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data.message || `语音识别失败（${response.status}）`);
+    if (!state.interview.active || state.interview.turnId !== snapshot.turnId) return;
+    const transcript = String(data.text || "").trim();
+    if (transcript.length < 2) throw new Error("没有识别到有效回答");
+    state.interview.transcript = transcript;
+    $("liveTranscript").textContent = transcript;
     state.transcripts.push({ turnId: snapshot.turnId, text: transcript, question: snapshot.question });
-    void submitRemoteTurn(transcript, snapshot);
-  }, REMOTE_FINAL_SETTLE_MS);
+    await submitRemoteTurn(transcript, snapshot);
+  } catch (error) {
+    if (controller.signal.aborted && !state.interview.active) return;
+    enableTextFallback(`阿里云没有听清：${error.message}。请直接修改这一题的文字。`);
+    $("fallbackAnswer").value = "";
+  } finally {
+    clearTimeout(timer);
+    if (state.interview.asrController === controller) state.interview.asrController = null;
+  }
 }
 
 async function submitRemoteTurn(transcript, snapshot = {}) {
@@ -835,7 +846,12 @@ async function speakQuestion(text, audioUrl = null) {
         headers: caseHeaders({ "Content-Type": "application/json" }),
         body: JSON.stringify({ caseId: state.caseId, text })
       });
-      if (response.ok) audioUrl = URL.createObjectURL(await response.blob());
+      if (response.ok && response.status !== 204) {
+        const audio = await response.blob();
+        if (audio.size > 0 && String(audio.type || "").startsWith("audio/")) {
+          audioUrl = URL.createObjectURL(audio);
+        }
+      }
     } catch (_) {
       audioUrl = null;
     }
@@ -865,9 +881,9 @@ async function speakQuestion(text, audioUrl = null) {
     });
   }
   if (!state.interview.active || state.interview.paused) return;
-  state.audio?.setSending(state.interview.mode === "remote");
+  state.audio?.setSending(state.interview.mode === "dashscope-http");
   setListening("live", "正在听你说话");
-  $("questionHint").textContent = "直接回答。停顿约 1 秒，系统自动进入下一题。";
+  $("questionHint").textContent = "直接回答。停顿约 1 秒后，系统识别整段回答。";
   if (state.interview.mode === "local-speech") startRecognition();
 }
 
@@ -879,7 +895,7 @@ function askQuestion(question, index = null) {
   if (Number.isFinite(index)) state.interview.questionIndex = index;
   state.interview.turnId = crypto.randomUUID ? crypto.randomUUID() : `turn-${Date.now()}`;
   state.interview.transcript = "";
-  $("liveTranscript").textContent = "你说的话会显示在这里";
+  $("liveTranscript").textContent = "停顿后，整段识别结果会显示在这里";
   $("currentQuestion").textContent = question.text;
   $("currentQuestion").dataset.factId = question.id;
   $("currentQuestion").dataset.factKind = question.kind || "text";
@@ -945,11 +961,6 @@ function enableTextFallback(message) {
 
 function activateLocalFallback(message) {
   state.localMode = true;
-  if (state.ws) {
-    state.ws.onclose = null;
-    state.ws.close();
-    state.ws = null;
-  }
   const hasSpeech = setupSpeechRecognition();
   state.interview.mode = hasSpeech ? "local-speech" : "local-text";
   $("transcriptMode").textContent = hasSpeech
@@ -971,7 +982,7 @@ async function beginInterview() {
   $("textFallback").hidden = true;
   setListening("", "正在申请麦克风");
 
-  state.audio = new ContinuousAudio();
+  state.audio = new ContinuousAudio(transcribeRecordedAnswer);
   let microphoneReady = false;
   try {
     await state.audio.start();
@@ -983,32 +994,21 @@ async function beginInterview() {
 
   await createCase();
   if (!microphoneReady) {
-    state.localMode = true;
     state.interview.mode = "local-text";
     state.interview.questionIndex = 0;
     askQuestion(questionAt(0), 0);
     return;
   }
 
-  const connected = await connectInterviewSocket();
-  if (connected) {
-    state.interview.mode = "remote";
-    $("transcriptMode").textContent = "StepFun 流式语音识别已连接";
-    const first = state.firstQuestion || questionAt(0);
-    askQuestion({
-      id: first.factId || first.id || first.field,
-      text: first.text,
-      kind: first.kind || questionAt(0)?.kind || "text",
-      label: first.label || FACT_LABELS[first.field] || questionAt(0)?.label
-    }, 0);
-    setTimeout(() => {
-      if (state.interview.active && state.interview.questionIndex < 0) {
-        activateLocalFallback("服务端没有及时返回问题，已切换到本机问诊。");
-      }
-    }, 3500);
-  } else {
-    activateLocalFallback("云端语音服务暂时不可用，已自动切换到本机问诊。");
-  }
+  state.interview.mode = "dashscope-http";
+  $("transcriptMode").textContent = "阿里云 Fun-ASR-Flash 已连接；停顿后显示整段识别结果";
+  const first = state.firstQuestion || questionAt(0);
+  askQuestion({
+    id: first.factId || first.id || first.field,
+    text: first.text,
+    kind: first.kind || questionAt(0)?.kind || "text",
+    label: first.label || FACT_LABELS[first.field] || questionAt(0)?.label
+  }, 0);
 }
 
 function parseMagnitude(numberText, unit) {
@@ -1124,14 +1124,6 @@ function handleLocalFinal(text) {
     factId: fact.id
   });
   state.interview.transcript = "";
-  if (state.interview.reaskFactId) {
-    state.interview.reaskFactId = null;
-    state.interview.active = false;
-    state.audio?.setSending(false);
-    stopRecognition();
-    prepareReview();
-    return;
-  }
   const nextIndex = state.interview.questionIndex + 1;
   if (nextIndex >= questionList().length || nextIndex >= 30) {
     finishInterview();
@@ -1151,22 +1143,19 @@ function pauseInterview() {
     if ("speechSynthesis" in window) window.speechSynthesis.cancel();
   } else {
     setListening("live", "正在听你说话");
-    state.audio?.setSending(state.interview.mode === "remote");
+    state.audio?.setSending(state.interview.mode === "dashscope-http");
     if (state.interview.mode === "local-speech") startRecognition();
   }
 }
 
 function finishInterview() {
-  if (state.interview.pendingFinalTimer) clearTimeout(state.interview.pendingFinalTimer);
-  state.interview.pendingFinalTimer = null;
-  state.interview.pendingTranscript = "";
-  state.interview.pendingItemId = "";
+  state.interview.asrController?.abort();
+  state.interview.asrController = null;
   state.interview.active = false;
   state.interview.complete = true;
   state.audio?.setSending(false);
   stopRecognition();
   if ("speechSynthesis" in window) window.speechSynthesis.cancel();
-  if (state.ws?.readyState === WebSocket.OPEN) state.ws.send(JSON.stringify({ type: "session.finish" }));
   prepareReview();
 }
 
@@ -1192,129 +1181,218 @@ function formatUnit(value, kind) {
   return money.format(value);
 }
 
-function numericRanges(fact) {
-  let center = Number(fact.value);
-  if (!Number.isFinite(center) && fact.range) center = (fact.range.min + fact.range.max) / 2;
-  if (!Number.isFinite(center)) return [];
-  let step;
-  if (fact.kind === "rate") step = 5;
-  else if (fact.kind === "count") step = Math.max(1, Math.ceil(center * .2));
-  else {
-    const rough = Math.max(100, center * .2);
-    const magnitude = 10 ** Math.max(0, Math.floor(Math.log10(rough)) - 1);
-    step = Math.ceil(rough / magnitude) * magnitude;
-  }
-  const lower = Math.max(0, center - step);
-  const upper = center + step;
-  return [
-    { label: `${formatUnit(0, fact.kind)}—${formatUnit(lower, fact.kind)}`, range: { min: 0, max: lower } },
-    { label: `${formatUnit(lower, fact.kind)}—${formatUnit(center, fact.kind)}`, range: { min: lower, max: center } },
-    { label: `${formatUnit(center, fact.kind)}—${formatUnit(upper, fact.kind)}`, range: { min: center, max: upper } },
-    { label: `${formatUnit(upper, fact.kind)}以上`, range: { min: upper, max: Math.max(upper + step, upper * 1.5) } }
-  ].filter((option) => option.range.max > option.range.min);
-}
-
 function prepareReview() {
   state.audio?.stop();
   state.audio = null;
   if (!reviewableFacts().length) {
     upsertFact({ id: "goal", label: "经营目标", kind: "text", value: "尚未说明", status: "unknown", source: "calculation", evidence: "U" });
   }
-  state.reviewIndex = Math.min(state.reviewIndex, Math.max(0, reviewableFacts().length - 1));
+  state.reviewSubmitted = false;
+  $("reviewForm").hidden = false;
   $("reviewSummary").hidden = true;
-  $("factCard").hidden = false;
   setPanel("review");
-  renderReviewCard();
+  renderReviewForm();
 }
 
-function renderReviewCard() {
-  const facts = reviewableFacts();
-  const fact = facts[state.reviewIndex];
-  if (!fact) {
-    renderReviewSummary();
-    return;
-  }
-  $("reviewCounter").textContent = `${state.reviewIndex + 1} / ${facts.length}`;
-  $("reviewProgressBar").style.width = `${((state.reviewIndex + 1) / facts.length) * 100}%`;
-  $("factLabel").textContent = fact.label || FACT_LABELS[fact.id] || fact.id;
-  $("factValue").textContent = formatFact(fact);
-  $("factEvidence").textContent = `来源：${fact.source === "voice" ? "语音转写" : "用户选择"} · 证据等级 ${fact.evidence}`;
+function reviewDraftText(fact) {
+  const raw = fact.rawTranscript ?? fact.raw ?? fact.transcript;
+  if (String(raw || "").trim()) return String(raw).trim();
+  return fact.status === "unknown" ? "" : formatFact(fact);
+}
 
-  const options = [];
-  options.push({ label: "AI 记录正确", action: "correct" });
-  if (["money", "rate", "count"].includes(fact.kind) && (Number.isFinite(Number(fact.value)) || fact.range)) {
-    numericRanges(fact).forEach((item) => options.push({ label: item.label, action: "range", range: item.range }));
-  } else if (fact.kind === "choice") {
-    options.push({ label: "是", action: "value", value: "yes" });
-    options.push({ label: "否", action: "value", value: "no" });
-  }
-  options.push({ label: "我不知道", action: "unknown" });
-  options.push({ label: "都不对，重新问我", action: "reask" });
-  $("factOptions").innerHTML = options.map((option, index) => `
-    <button type="button" data-option="${index}" data-action="${option.action}">${escapeHtml(option.label)}</button>
-  `).join("");
-  $("factOptions").querySelectorAll("button").forEach((button) => {
-    button.addEventListener("click", () => chooseReviewOption(fact, options[Number(button.dataset.option)]));
+function setReviewRowMode(row, mode) {
+  row.dataset.mode = mode;
+  row.querySelectorAll('input[type="radio"]').forEach((radio) => {
+    radio.checked = radio.value === mode;
   });
 }
 
-function chooseReviewOption(fact, option) {
-  if (option.action === "reask") {
-    reaskFact(fact);
-    return;
-  }
-  if (option.action === "unknown") {
-    fact.value = null;
-    fact.range = null;
-    fact.status = "unknown";
-    fact.evidence = "U";
-  } else if (option.action === "range") {
-    fact.value = null;
-    fact.range = option.range;
-    fact.status = "confirmed";
-    fact.source = "choice";
-    fact.evidence = "B";
-  } else if (option.action === "value") {
-    fact.value = option.value;
-    fact.range = null;
-    fact.status = "confirmed";
-    fact.source = "choice";
-    fact.evidence = "B";
-  } else {
-    fact.status = fact.status === "unknown" ? "unknown" : "confirmed";
-    if (fact.status === "confirmed") fact.evidence = "B";
-  }
-  fact.updatedAt = new Date().toISOString();
-  state.caseVersion += 1;
-  state.reviewIndex += 1;
-  if (state.reviewIndex >= reviewableFacts().length) renderReviewSummary();
-  else renderReviewCard();
+function renderReviewForm() {
+  const facts = reviewableFacts();
+  $("reviewFactsList").innerHTML = facts.map((fact, index) => {
+    const mode = fact.status === "unknown" ? "unknown" : "correct";
+    const source = fact.source === "voice" ? "语音识别" : fact.source === "typed" ? "手动输入" : "系统整理";
+    return `
+      <fieldset class="fact-review-row" data-fact-index="${index}" data-mode="${mode}" data-testid="fact-review-row">
+        <div class="fact-review-heading">
+          <span>${escapeHtml(fact.label || FACT_LABELS[fact.id] || fact.id)}<small>${escapeHtml(source)} · 证据 ${escapeHtml(fact.evidence || "U")}</small></span>
+          <strong>${escapeHtml(formatFact(fact))}</strong>
+        </div>
+        <div class="fact-review-modes">
+          <label class="fact-review-choice">
+            <input type="radio" name="review-${index}" value="correct" ${mode === "correct" ? "checked" : ""}>
+            <span>AI 记录正确</span>
+          </label>
+          <label class="fact-review-choice unknown">
+            <input type="radio" name="review-${index}" value="unknown" ${mode === "unknown" ? "checked" : ""}>
+            <span>我不知道</span>
+          </label>
+          <label class="fact-review-edit">
+            <input type="radio" name="review-${index}" value="edit">
+            <textarea rows="1" data-role="edit-text" aria-label="修改${escapeHtml(fact.label || fact.id)}">${escapeHtml(reviewDraftText(fact))}</textarea>
+          </label>
+        </div>
+        <p class="fact-review-error" data-role="error" aria-live="polite"></p>
+      </fieldset>
+    `;
+  }).join("");
+
+  $("reviewFactsList").querySelectorAll(".fact-review-row").forEach((row) => {
+    row.querySelectorAll('input[type="radio"]').forEach((radio) => {
+      radio.addEventListener("change", () => {
+        row.dataset.mode = radio.value;
+        row.classList.remove("invalid");
+        row.querySelector('[data-role="error"]').textContent = "";
+      });
+    });
+    const editor = row.querySelector('[data-role="edit-text"]');
+    ["focus", "input"].forEach((eventName) => editor.addEventListener(eventName, () => {
+      setReviewRowMode(row, "edit");
+      row.classList.remove("invalid");
+      row.querySelector('[data-role="error"]').textContent = "";
+    }));
+  });
 }
 
-async function reaskFact(fact) {
-  state.interview.reaskFactId = fact.id;
-  state.interview.active = true;
-  state.interview.paused = false;
-  state.interview.mode = "local-text";
-  $("textFallback").hidden = false;
-  $("fallbackAnswer").value = "";
-  setPanel("interview");
-  askQuestion({
-    id: fact.id,
-    kind: fact.kind,
-    label: fact.label,
-    text: `请重新告诉我：${fact.label}大约是多少？`
-  }, state.interview.questionIndex);
-  enableTextFallback("纠偏重问：说清这一项即可，也可以直接输入。");
+function parseEditedFact(fact, rawText) {
+  const text = String(rawText || "").trim();
+  if (!text) throw new Error("修改内容不能为空；如果确实不知道，请选择“我不知道”");
+  const next = {
+    ...fact,
+    status: "confirmed",
+    source: "typed",
+    evidence: "B",
+    evidenceGrade: "B",
+    raw: text,
+    rawTranscript: text,
+    transcript: text,
+    updatedAt: new Date().toISOString()
+  };
+  if (["money", "rate", "count"].includes(fact.kind)) {
+    if (fact.id === "debt" && /(没有|没欠|零负债|无负债)/.test(text)) {
+      next.value = 0;
+      next.range = null;
+    } else {
+      const parsed = parseNumericAnswer(text, fact.kind);
+      if (parsed.value === null && !parsed.range) throw new Error("没有读到数字，请写金额、比例、人数或一个范围");
+      next.value = parsed.value;
+      next.range = parsed.range;
+    }
+    next.period = /(一年|每年|年租|一年期|\/年)/.test(text) ? "year" : (fact.period || "month");
+    return next;
+  }
+  if (fact.kind === "choice") {
+    if (/(不知道|不确定|说不准)/.test(text)) {
+      next.value = null;
+      next.range = null;
+      next.status = "unknown";
+      next.evidence = "U";
+      next.evidenceGrade = "U";
+    } else if (/(不是|不能|不会|没有|没做|否)/.test(text)) {
+      next.value = "no";
+      next.range = null;
+    } else if (/(是|能|会|有|做过|可以)/.test(text)) {
+      next.value = "yes";
+      next.range = null;
+    } else {
+      throw new Error("请写“是”“否”，或者选择“我不知道”");
+    }
+    return next;
+  }
+  next.value = text;
+  next.range = null;
+  return next;
+}
+
+function collectReviewCorrections() {
+  const facts = reviewableFacts();
+  const corrections = [];
+  let firstInvalid = null;
+  $("reviewFactsList").querySelectorAll(".fact-review-row").forEach((row) => {
+    const fact = facts[Number(row.dataset.factIndex)];
+    const mode = row.querySelector('input[type="radio"]:checked')?.value || "correct";
+    let next;
+    try {
+      if (mode === "unknown") {
+        next = {
+          ...fact, value: null, range: null, status: "unknown", source: "choice",
+          evidence: "U", evidenceGrade: "U", updatedAt: new Date().toISOString()
+        };
+      } else if (mode === "edit") {
+        next = parseEditedFact(fact, row.querySelector('[data-role="edit-text"]').value);
+      } else {
+        next = {
+          ...fact,
+          status: fact.value == null && !fact.range ? "unknown" : "confirmed",
+          source: "choice",
+          evidence: fact.value == null && !fact.range ? "U" : "B",
+          evidenceGrade: fact.value == null && !fact.range ? "U" : "B",
+          updatedAt: new Date().toISOString()
+        };
+      }
+      row.classList.remove("invalid");
+      row.querySelector('[data-role="error"]').textContent = "";
+      corrections.push(next);
+    } catch (error) {
+      row.classList.add("invalid");
+      row.querySelector('[data-role="error"]').textContent = error.message;
+      firstInvalid ||= row;
+    }
+  });
+  if (firstInvalid) {
+    firstInvalid.scrollIntoView({ behavior: "smooth", block: "center" });
+    return null;
+  }
+  return corrections;
+}
+
+async function submitReviewForm() {
+  const corrections = collectReviewCorrections();
+  if (!corrections) {
+    $("reviewFormStatus").textContent = "有一项修改无法解析，请按红色提示处理。";
+    return;
+  }
+  const button = $("submitReview");
+  button.disabled = true;
+  button.textContent = "正在提交…";
+  $("reviewFormStatus").textContent = "正在保存整份事实档案…";
+  try {
+    const correctionIds = new Set(corrections.map((fact) => fact.id));
+    let nextFacts = state.facts.map((fact) => correctionIds.has(fact.id)
+      ? corrections.find((item) => item.id === fact.id)
+      : fact);
+    if (!state.localMode && state.caseId) {
+      const reviewed = await fetchJson(`/api/cases/${encodeURIComponent(state.caseId)}/review`, {
+        method: "POST",
+        headers: caseHeaders({ "Content-Type": "application/json", "Accept": "application/json" }),
+        body: JSON.stringify({ caseVersion: state.caseVersion, corrections })
+      }, 10_000);
+      if (Array.isArray(reviewed.facts)) {
+        const serverFacts = new Map(reviewed.facts.map((fact) => [fact.id, fact]));
+        nextFacts = nextFacts.map((fact) => serverFacts.has(fact.id)
+          ? { ...fact, ...serverFacts.get(fact.id), label: fact.label, kind: fact.kind }
+          : fact);
+      }
+      if (Number.isFinite(Number(reviewed.version))) state.caseVersion = Number(reviewed.version);
+    } else {
+      state.caseVersion += 1;
+    }
+    state.facts = nextFacts;
+    state.reviewSubmitted = true;
+    $("reviewForm").hidden = true;
+    renderReviewSummary();
+  } catch (error) {
+    $("reviewFormStatus").textContent = `提交失败：${error.message}`;
+  } finally {
+    button.disabled = false;
+    button.textContent = "确定提交";
+  }
 }
 
 function renderReviewSummary() {
-  $("factCard").hidden = true;
   $("reviewSummary").hidden = false;
   const facts = reviewableFacts();
   const known = facts.filter((fact) => fact.status !== "unknown");
-  $("reviewCounter").textContent = `${facts.length} / ${facts.length}`;
-  $("reviewProgressBar").style.width = "100%";
   $("reviewSummaryList").innerHTML = known.slice(0, 8).map((fact) => `
     <div><span>${escapeHtml(fact.label)}</span><b>${escapeHtml(formatFact(fact))}</b></div>
   `).join("") + (known.length > 8 ? `<div><span>其他已确认事实</span><b>${known.length - 8} 项</b></div>` : "");
@@ -1414,6 +1492,11 @@ function deterministicAssessment() {
 }
 
 async function startAnalysis() {
+  if (!state.reviewSubmitted) {
+    setPanel("review");
+    $("reviewFormStatus").textContent = "请先在本页底部点击“确定提交”。";
+    return;
+  }
   if (Object.values(state.footfall.counts).some((value) => value > 0)) {
     storeFootfallEvidence(state.footfall.remainingSeconds <= 0);
   }
@@ -1431,11 +1514,6 @@ async function startAnalysis() {
   };
   if (!state.localMode && state.caseId) {
     try {
-      await fetchJson(`/api/cases/${encodeURIComponent(state.caseId)}/review`, {
-        method: "POST",
-        headers: caseHeaders({ "Content-Type": "application/json" }),
-        body: JSON.stringify({ caseVersion: state.caseVersion, corrections: state.facts })
-      }, 8000);
       const data = await fetchJson(`/api/cases/${encodeURIComponent(state.caseId)}/analyze`, {
         method: "POST",
         headers: caseHeaders({ "Content-Type": "application/json" }),
@@ -1465,7 +1543,7 @@ function startProgressAnimation() {
   let step = 0;
   const messages = [
     ["先按勇哥框架算账", "正在检查单位经济、现金寿命和第一断点…", 12],
-    ["正在探索不同经营杠杆", "5 个 Agent 一组，生成位置、产品、人员、渠道等候选方案…", 35],
+    ["正在探索不同经营杠杆", "3 条独立流水线，同时生成位置、产品、人员、渠道等候选方案…", 35],
     ["正在淘汰讲不通的方案", "核对证据引用、替代解释、预算和停止线…", 58],
     ["正在做财务与执行核验", "算不过账、不可逆或无法测量的方案直接淘汰…", 77],
     ["正在合并重复机制", "不会把三种门头文案凑成三个方案…", 91]
@@ -1498,7 +1576,7 @@ async function watchAnalysisRun(runId) {
       }, 10000);
       const progress = data.progress || {};
       const completed = Number(progress.completed) || 0;
-      const target = Number(progress.target) || 20;
+      const target = Number(progress.target) || 3;
       $("analysisProgressBar").style.width = `${Math.max(8, Math.min(98, completed / target * 100))}%`;
       if (progress.phase) $("analysisStatus").textContent = progressLabel(progress);
       if (data.status === "completed" && data.result) {
@@ -1522,10 +1600,10 @@ async function watchAnalysisRun(runId) {
 function progressLabel(progress) {
   const labels = {
     queued: "已经排队，马上开始算账",
-    generate: `第 ${progress.round || 1} 轮：正在生成 5 个不同机制`,
-    "verify-evidence": `第 ${progress.round || 1} 轮：正在核验证据与因果`,
-    "verify-execution": `第 ${progress.round || 1} 轮：正在核验财务与执行`,
-    "round-complete": `已完成 ${progress.completed || 0} / ${progress.target || 20} 个候选`,
+    generate: "正在并行生成 3 个不同机制",
+    "verify-evidence": "正在逐条核验证据与因果",
+    "verify-execution": "正在逐条核验财务与执行",
+    "round-complete": `已完成 ${progress.completed || 0} / ${progress.target || 3} 条流水线`,
     completed: "方案搜索与双核验完成"
   };
   return labels[progress.phase] || "Agent 正在继续分析";
@@ -1595,7 +1673,7 @@ function localAnalysis() {
       title: "当前结论",
       body: `${known} 项事实已经确认，${unknown} 项仍未知。系统优先保留可逆、便宜、能在短期证伪的动作。`
     },
-    candidateCount: 20,
+    candidateCount: 3,
     validCandidateCount: unique.length,
     topPlans: unique,
     rejectedReasons: [
@@ -1718,7 +1796,7 @@ async function startSelectedPlan(planId, button) {
 function resetFlow() {
   clearInterval(state.analysisTimer);
   stopFootfallTimer();
-  state.ws?.close();
+  state.interview.asrController?.abort();
   state.audio?.stop();
   stopRecognition();
   if ("speechSynthesis" in window) window.speechSynthesis.cancel();
@@ -1736,8 +1814,7 @@ function resetFlow() {
     mapContextLoaded: false,
     facts: [],
     transcripts: [],
-    reviewIndex: 0,
-    ws: null,
+    reviewSubmitted: false,
     audio: null,
     recognition: null,
     analysisTimer: null,
@@ -1752,8 +1829,8 @@ function resetFlow() {
   });
   state.interview = {
     active: false, paused: false, complete: false, questionIndex: -1,
-    turnId: null, mode: "pending", transcript: "", noSpeechCount: 0, reaskFactId: null,
-    pendingFinalTimer: null, pendingTranscript: "", pendingItemId: "", submitInFlight: false
+    turnId: null, mode: "pending", transcript: "", noSpeechCount: 0,
+    submitInFlight: false, asrController: null
   };
   document.querySelectorAll("[data-stage]").forEach((button) => button.classList.remove("selected"));
   $("category").value = "";
@@ -1839,17 +1916,21 @@ $("manualLocation").addEventListener("keydown", (event) => {
 $("beginInterview").addEventListener("click", () => void beginInterview());
 $("pauseInterview").addEventListener("click", pauseInterview);
 $("finishInterview").addEventListener("click", finishInterview);
+$("reviewForm").addEventListener("submit", (event) => {
+  event.preventDefault();
+  void submitReviewForm();
+});
 $("textFallback").addEventListener("submit", (event) => {
   event.preventDefault();
   const text = $("fallbackAnswer").value.trim();
   if (!text) return;
   $("fallbackAnswer").value = "";
-  if (state.interview.mode === "remote" && state.ws?.readyState === WebSocket.OPEN) {
-    $("liveTranscript").textContent = text;
-    void submitRemoteTurn(text);
-  } else {
+  if (state.interview.mode === "local-speech" || state.interview.mode === "local-text") {
     $("liveTranscript").textContent = text;
     handleLocalFinal(text);
+  } else {
+    $("liveTranscript").textContent = text;
+    void submitRemoteTurn(text);
   }
 });
 $("fallbackAnswer").addEventListener("keydown", (event) => {

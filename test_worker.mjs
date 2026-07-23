@@ -29,6 +29,13 @@ globalThis.fetch = async (input, init = {}) => {
     });
   }
 
+  if (url.hostname === "dashscope.aliyuncs.com") {
+    return Response.json({
+      output: { text: "Hello World，这里是阿里巴巴语音实验室。" },
+      request_id: "dashscope-request-test"
+    });
+  }
+
   if (url.pathname.includes("/location/v1/ip")) {
     return Response.json({
       status: 0,
@@ -103,12 +110,42 @@ const apiRequest = (path, { method = "GET", token, body, headers = {} } = {}) =>
     headers: {
       ...headers,
       ...(token ? { "X-Case-Token": token } : {}),
-      ...(body ? { "Content-Type": "application/json" } : {})
+      ...(body !== undefined && !("Content-Type" in headers)
+        ? { "Content-Type": "application/json" }
+        : {})
     },
-    body: body ? JSON.stringify(body) : undefined
+    body: body instanceof ArrayBuffer || ArrayBuffer.isView(body)
+      ? body
+      : body !== undefined
+        ? JSON.stringify(body)
+        : undefined
   }),
   env
 );
+
+function validWavFixture() {
+  const bytes = new Uint8Array(44);
+  const writeAscii = (offset, value) => {
+    for (let index = 0; index < value.length; index += 1) {
+      bytes[offset + index] = value.charCodeAt(index);
+    }
+  };
+  const view = new DataView(bytes.buffer);
+  writeAscii(0, "RIFF");
+  view.setUint32(4, 36, true);
+  writeAscii(8, "WAVE");
+  writeAscii(12, "fmt ");
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, 1, true);
+  view.setUint32(24, 16000, true);
+  view.setUint32(28, 32000, true);
+  view.setUint16(32, 2, true);
+  view.setUint16(34, 16, true);
+  writeAscii(36, "data");
+  view.setUint32(40, 0, true);
+  return bytes.buffer;
+}
 
 try {
   const asrConfig = asrSessionConfig({});
@@ -230,6 +267,65 @@ try {
   assert.equal(locationResponse.status, 200);
   assert.equal((await locationResponse.json()).firstQuestion.complete, false);
 
+  env.DASHSCOPE_API_KEY = "dashscope-server-only-key";
+  const asrStart = upstreamCalls.length;
+  const asrResponse = await apiRequest(`/api/cases/${created.case.id}/asr`, {
+    method: "POST",
+    token: created.caseToken,
+    headers: { "Content-Type": "audio/wav" },
+    body: validWavFixture()
+  });
+  assert.equal(asrResponse.status, 200);
+  const asr = await asrResponse.json();
+  assert.equal(asr.text, "Hello World，这里是阿里巴巴语音实验室。");
+  assert.equal(asr.requestId, "dashscope-request-test");
+  assert.equal(asr.model, "fun-asr-flash-2026-06-15");
+  const asrCalls = upstreamCalls.slice(asrStart);
+  assert.equal(asrCalls.length, 1);
+  assert.equal(
+    asrCalls[0].url.href,
+    "https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation"
+  );
+  assert.equal(asrCalls[0].init.method, "POST");
+  assert.equal(asrCalls[0].init.headers.Authorization, "Bearer dashscope-server-only-key");
+  assert.equal(asrCalls[0].init.headers["X-DashScope-SSE"], "disable");
+  const dashScopeBody = JSON.parse(asrCalls[0].init.body);
+  assert.equal(dashScopeBody.model, "fun-asr-flash-2026-06-15");
+  assert.deepEqual(dashScopeBody.parameters, { format: "wav", sample_rate: "16000" });
+  assert.match(
+    dashScopeBody.input.messages.at(-1).content[0].input_audio.data,
+    /^data:audio\/wav;base64,/
+  );
+  assert.match(
+    dashScopeBody.input.messages[0].content[0].text,
+    /营业额/
+  );
+
+  const invalidWavResponse = await apiRequest(`/api/cases/${created.case.id}/asr`, {
+    method: "POST",
+    token: created.caseToken,
+    headers: { "Content-Type": "audio/wav" },
+    body: new Uint8Array(44).buffer
+  });
+  assert.equal(invalidWavResponse.status, 422);
+  assert.equal((await invalidWavResponse.json()).code, "ASR_AUDIO_INVALID");
+
+  delete env.DASHSCOPE_API_KEY;
+  const missingDashScopeKeyResponse = await apiRequest(`/api/cases/${created.case.id}/asr`, {
+    method: "POST",
+    token: created.caseToken,
+    headers: { "Content-Type": "audio/wav" },
+    body: validWavFixture()
+  });
+  assert.equal(missingDashScopeKeyResponse.status, 503);
+  assert.equal((await missingDashScopeKeyResponse.json()).code, "DASHSCOPE_NOT_CONFIGURED");
+
+  const retiredInterviewResponse = await apiRequest(`/api/cases/${created.case.id}/interview`, {
+    token: created.caseToken
+  });
+  assert.equal(retiredInterviewResponse.status, 410);
+  assert.equal((await retiredInterviewResponse.json()).code, "ASR_PROTOCOL_RETIRED");
+
   const turnResponse = await apiRequest(`/api/cases/${created.case.id}/turns`, {
     method: "POST",
     token: created.caseToken,
@@ -259,18 +355,54 @@ try {
   assert.equal(staleTurnResponse.status, 409);
   assert.equal((await staleTurnResponse.json()).code, "CASE_VERSION_CONFLICT");
 
+  const reviewCorrections = [
+    {
+      id: "monthlyRevenue",
+      field: "monthlyRevenue",
+      value: null,
+      range: { min: 100000, max: 120000 },
+      unit: "元",
+      period: "月",
+      status: "confirmed",
+      source: "typed",
+      transcript: "一个月十到十二万"
+    },
+    {
+      id: "cashReserve",
+      field: "cashReserve",
+      value: null,
+      range: null,
+      unit: "元",
+      status: "unknown",
+      source: "choice",
+      transcript: "我不知道"
+    }
+  ];
   const reviewResponse = await apiRequest(`/api/cases/${created.case.id}/review`, {
     method: "POST",
     token: created.caseToken,
     body: {
-      corrections: [
-        { id: "monthlyRevenue", value: 100000, unit: "元", period: "月", status: "confirmed" },
-        { id: "cashReserve", value: 50000, unit: "元", status: "confirmed" }
-      ]
+      caseVersion: turn.version,
+      corrections: reviewCorrections
     }
   });
   assert.equal(reviewResponse.status, 200);
   const reviewed = await reviewResponse.json();
+  assert.equal(reviewed.version, turn.version + 1);
+  const reviewedRevenue = reviewed.facts.find((fact) => fact.id === "monthlyRevenue");
+  assert.equal(reviewedRevenue.value, null);
+  assert.deepEqual(reviewedRevenue.range, { min: 100000, max: 120000 });
+  assert.equal(reviewedRevenue.source, "typed");
+  assert.equal(reviewedRevenue.transcript, "一个月十到十二万");
+  assert.equal(reviewedRevenue.status, "confirmed");
+  assert.equal(reviewedRevenue.evidence, "B");
+  const reviewedCash = reviewed.facts.find((fact) => fact.id === "cashReserve");
+  assert.equal(reviewedCash.value, null);
+  assert.equal(reviewedCash.range, null);
+  assert.equal(reviewedCash.status, "unknown");
+  assert.equal(reviewedCash.source, "choice");
+  assert.equal(reviewedCash.transcript, "我不知道");
+  assert.equal(reviewedCash.evidence, "U");
 
   const analyzeResponse = await apiRequest(`/api/cases/${created.case.id}/analyze`, {
     method: "POST",
@@ -308,10 +440,8 @@ try {
     method: "POST",
     token: created.caseToken,
     body: {
-      corrections: [
-        { id: "monthlyRevenue", value: 100000, unit: "元", period: "月", status: "confirmed" },
-        { id: "cashReserve", value: 50000, unit: "元", status: "confirmed" }
-      ]
+      caseVersion: reviewed.version,
+      corrections: reviewCorrections
     }
   });
   assert.equal(duplicateReviewResponse.status, 200);
@@ -335,11 +465,6 @@ try {
   const reusedAnalysis = await reusedAnalysisResponse.json();
   assert.equal(reusedAnalysis.runId, analyze.runId);
   assert.equal(reusedAnalysis.reused, true);
-
-  const asrFallback = await apiRequest(`/api/cases/${created.case.id}/interview`, {
-    token: created.caseToken
-  });
-  assert.equal(asrFallback.status, 426);
 
   const ttsFallback = await apiRequest("/api/tts", {
     method: "POST",
@@ -737,4 +862,4 @@ try {
   globalThis.fetch = originalFetch;
 }
 
-console.log("worker map + case API + deterministic authority + ASR/analysis quotas + queue/DLQ guards: 132 assertions passed");
+console.log("worker map + DashScope ASR + batch review + deterministic authority + quotas + queue/DLQ guards: all assertions passed");

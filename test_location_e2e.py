@@ -20,6 +20,7 @@ from playwright.sync_api import Page, Route, expect, sync_playwright
 
 ROOT = Path(__file__).resolve().parent
 ADDRESS = "上海市黄浦区南京东路300号"
+API_COUNTS = {"review": 0, "asr": 0}
 
 
 class QuietHandler(SimpleHTTPRequestHandler):
@@ -106,7 +107,24 @@ def api_fixture(route: Route) -> None:
         )
         return
     if path.endswith("/api/tts"):
-        route.fulfill(status=503, content_type="application/json", body='{"message":"disabled"}')
+        route.fulfill(status=204, body="")
+        return
+    if path.endswith("/api/cases/case_e2e/review") and route.request.method == "POST":
+        API_COUNTS["review"] += 1
+        payload = route.request.post_data_json
+        fulfill_json(
+            route,
+            {
+                "caseId": "case_e2e",
+                "version": 3,
+                "facts": payload.get("corrections", []),
+            },
+        )
+        return
+    if path.endswith("/api/cases/case_e2e/analyze") and route.request.method == "POST":
+        # An empty successful response deliberately exercises the deterministic
+        # local result renderer without producing an expected console error.
+        fulfill_json(route, {})
         return
     fulfill_json(route, {"code": "UNEXPECTED", "message": path}, 500)
 
@@ -134,6 +152,7 @@ def confirm_manual_location(page: Page) -> None:
 
 
 def test_location_and_text_fallback(browser, base_url: str) -> None:
+    API_COUNTS["review"] = 0
     context = browser.new_context(base_url=base_url, locale="zh-CN")
     context.route("**/api/**", api_fixture)
     page = context.new_page()
@@ -175,14 +194,35 @@ def test_location_and_text_fallback(browser, base_url: str) -> None:
     page.locator("#fallbackAnswer").fill("最近亏损，想先止损")
     page.locator("#textFallback button[type=submit]").click()
     expect(page.locator("#currentQuestion")).to_contain_text("一个月", timeout=5_000)
+    page.locator("#fallbackAnswer").fill("一个月大约十二万")
+    page.locator("#textFallback button[type=submit]").click()
     page.locator("#finishInterview").click()
     expect(page.locator('[data-panel="review"]')).to_be_visible()
 
-    for _ in range(8):
-        if page.locator("#reviewSummary").is_visible():
-            break
-        page.locator('#factOptions button[data-action="correct"]').click()
+    rows = page.locator('[data-testid="fact-review-row"]')
+    expect(rows).to_have_count(3)
+    revenue_row = rows.filter(has_text="月营业额")
+    category_row = rows.filter(has_text="经营品类")
+    expect(revenue_row).to_be_visible()
+    expect(category_row).to_be_visible()
+    category_row.locator('input[value="unknown"]').check()
+    revenue_row.locator('[data-role="edit-text"]').fill("大概不少")
+    page.locator("#submitReview").click()
+    expect(revenue_row.locator('[data-role="error"]')).to_contain_text("没有读到数字")
+    assert API_COUNTS["review"] == 0
+    revenue_row.locator('[data-role="edit-text"]').fill("一个月十到十二万")
+    page.locator("#submitReview").click()
     expect(page.locator("#reviewSummary")).to_be_visible()
+    assert API_COUNTS["review"] == 1, API_COUNTS
+    reviewed = page.evaluate(
+        """() => Object.fromEntries(state.facts.map((fact) => [fact.id, fact]))"""
+    )
+    assert reviewed["category"]["status"] == "unknown"
+    assert reviewed["category"]["value"] is None
+    assert reviewed["monthlyRevenue"]["range"] == {"min": 100_000, "max": 120_000}
+    assert reviewed["monthlyRevenue"]["source"] == "typed"
+    assert reviewed["monthlyRevenue"]["rawTranscript"] == "一个月十到十二万"
+    expect(page.locator('[data-panel="interview"]')).to_be_hidden()
 
     page.locator("#startAnalysis").click()
     expect(page.locator('[data-panel="result"]')).to_be_visible()
@@ -190,6 +230,7 @@ def test_location_and_text_fallback(browser, base_url: str) -> None:
     expect(page.locator(".plan-card")).to_have_count(3)
     expect(page.locator('[data-testid="footfall-result-evidence"]')).to_contain_text("4")
     expect(page.locator('[data-testid="footfall-result-evidence"]')).to_contain_text("25.0%")
+    assert API_COUNTS["review"] == 1
     if errors:
         raise AssertionError("页面产生错误：" + " | ".join(errors))
     context.close()

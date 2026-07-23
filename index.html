@@ -21,7 +21,7 @@
       <div>
         <span class="eyebrow">先算账，再行动</span>
         <h1>不用填表，<br><em>把店说清楚。</em></h1>
-        <p>先确认店铺位置，再点一次开始。系统会持续听、逐题问、自动整理，最后让你用选择题纠偏。</p>
+        <p>先确认店铺位置，再点一次开始。系统逐题听你回答、自动整理，最后把所有记录放在一页核对。</p>
         <a class="primary-button" href="#judge" data-testid="hero-start">开始店铺问诊</a>
       </div>
       <div class="hero-result">
@@ -176,9 +176,9 @@
           </div>
 
           <div class="transcript-shell">
-            <span>实时转写</span>
-            <p id="liveTranscript" aria-live="polite" data-testid="live-transcript">你说的话会显示在这里</p>
-            <small id="transcriptMode">正在连接语音服务…</small>
+            <span>本轮回答</span>
+            <p id="liveTranscript" aria-live="polite" data-testid="live-transcript">停顿后，整段识别结果会显示在这里</p>
+            <small id="transcriptMode">正在准备阿里云语音识别…</small>
           </div>
 
           <form class="text-fallback" id="textFallback" hidden data-testid="text-fallback">
@@ -197,22 +197,19 @@
         </section>
 
         <section class="flow-card flow-panel review-panel" id="reviewPanel" data-panel="review" hidden data-testid="review-step">
-          <div class="review-progress">
-            <span id="reviewCounter">1 / 1</span>
-            <div><i id="reviewProgressBar"></i></div>
-          </div>
           <div class="step-title">
             <span>第三步</span>
-            <h3>只改明显不对的地方</h3>
-            <p>一张卡一次选择。区间比假装精确更可靠。</p>
+            <h3>一次看完所有记录</h3>
+            <p>每一项只需确认正确、标记不知道，或者直接修改你刚才说的话。</p>
           </div>
 
-          <article class="fact-card" id="factCard" data-testid="fact-card">
-            <small id="factLabel">事实</small>
-            <strong id="factValue">—</strong>
-            <p id="factEvidence">来源：语音转写</p>
-            <div class="fact-options" id="factOptions" role="group" aria-label="纠偏选项" data-testid="fact-options"></div>
-          </article>
+          <form id="reviewForm" class="review-form" data-testid="review-form">
+            <div class="review-facts-list" id="reviewFactsList" data-testid="review-facts-list"></div>
+            <div class="review-submit-bar">
+              <p id="reviewFormStatus" role="status" aria-live="polite">所有问题都列在这里，不会再用语音重问。</p>
+              <button class="primary-button" id="submitReview" type="submit" data-testid="submit-review">确定提交</button>
+            </div>
+          </form>
 
           <section class="review-summary" id="reviewSummary" hidden data-testid="review-summary">
             <span class="section-kicker">店铺档案已整理</span>

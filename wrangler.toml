@@ -48,8 +48,8 @@ APP_ORIGIN = "https://yongge.zhangyvjing.com"
 STEPFUN_BASE_URL = "https://api.stepfun.com/step_plan/v1"
 STEPFUN_MODEL = "step-3.7-flash"
 STEPFUN_TTS_MODEL = "stepaudio-2.5-tts"
-STEPFUN_ASR_MODEL = "stepaudio-2.5-asr-stream"
-STEPFUN_ASR_URL = "wss://api.stepfun.com/v1/realtime/asr/stream"
+DASHSCOPE_ASR_URL = "https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation"
+DASHSCOPE_ASR_MODEL = "fun-asr-flash-2026-06-15"
 ANALYSIS_DAILY_BUDGET = "25"
 ANALYSIS_DAILY_IP_BUDGET = "5"
 
@@ -58,8 +58,8 @@ ANALYSIS_DAILY_IP_BUDGET = "5"
 # or, for a server-only comma/newline-separated key pool:
 #   npx wrangler secret put STEPFUN_API_KEYS
 #   npx wrangler secret put TENCENT_MAP_KEY
+#   npx wrangler secret put DASHSCOPE_API_KEY
 #
-# Production analysis uses ANALYSIS_QUEUE. Each message runs exactly one
-# 5-generator + 5-evidence-verifier + 5-execution-verifier round. D1 must be
-# bound before deploying the queue consumer, because it stores cumulative
-# search state between the four messages.
+# Production analysis uses ANALYSIS_QUEUE. Each run creates exactly 3 candidate
+# pipelines; every candidate receives one evidence/causality review and one
+# finance/execution review, with global concurrency capped at 3.

@@ -14,6 +14,7 @@ for source_file in \
   interview-policy.js \
   server-decision-adapter.mjs \
   worker.mjs \
+  dashscope-asr-client.js \
   stepfun-client.js \
   agent-orchestrator.js
 do
@@ -24,9 +25,16 @@ node test_fact_store.js
 node test_decision_engine.js
 node test_interview_policy.js
 node test_server_decision_adapter.mjs
+node test_dashscope_asr_client.mjs
 node test_stepfun_client.mjs
 node test_agent_orchestrator.js
 node test_worker.mjs
+
+# The live ASR check uses the real paid/network API and is therefore opt-in.
+# Run with RUN_DASHSCOPE_LIVE_ASR=1 when validating credentials or the model.
+if [[ "${RUN_DASHSCOPE_LIVE_ASR:-0}" == "1" ]]; then
+  python test_dashscope_asr_live.py
+fi
 
 python build_site.py
 

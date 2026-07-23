@@ -16,11 +16,12 @@ flowchart TD
   U["用户"] --> L["第一屏：确认位置"]
   L --> MAP["腾讯地图背景"]
   L --> I["第二屏：持续语音问诊"]
-  I --> ASR["StepFun 流式 ASR"]
+  I --> VAD["浏览器 VAD + 单轮 WAV"]
+  VAD --> ASR["DashScope Fun-ASR-Flash HTTP"]
   ASR --> Q["单一问题调度 Agent"]
   Q --> TTS["StepFun TTS + 屏幕短问题"]
   Q --> F["候选事实档案"]
-  F --> R["第三屏：选择题纠偏"]
+  F --> R["第三屏：一屏全量事实查证"]
   R --> CF["已确认事实档案"]
   CF --> D["勇哥确定性引擎"]
   D --> S["单轮 3 条方案流水线"]
@@ -52,30 +53,29 @@ IP 位置只允许预填城市，不返回店铺坐标，也不能直接解锁�
 用户只点击一次开始。浏览器随后：
 
 - 一次性申请麦克风权限；
-- 用 Web Audio 把音频重采样为 16 kHz、16-bit、单声道 PCM；
-- 通过案卷 WebSocket 连续发送 Base64 音频帧；
-- 实时整体更新 StepFun 增量转写；
-- 只在最终转写到达后提交本轮事实抽取；
+- 用 Web Audio 把音频重采样为 16 kHz 单声道；
+- 使用客户端能量 VAD 检测用户开始和停止说话；
+- 将每轮回答打包为 16-bit WAV，通过案卷 HTTP 接口发送；
+- DashScope 返回该段最终转写后，再提交本轮事实抽取；
 - 显示当前短问题、问诊进度、转写和暂停/结束按钮。
 
-StepFun 服务端 VAD 的静音阈值为 600 ms；最终转写到达后，客户端再保留 250 ms 的短合并窗口。正常情况下，用户停顿后约 0.85 秒便会开始处理答案，比原来的 1.85 秒缩短约 1 秒。若这 250 ms 内再次收到 `speech_started`，客户端会取消提交并把随后片段合并到同一回答，避免极短停顿把一句话拆成两题。每轮使用唯一 `turnId`，重复或迟到结果不能覆盖新一轮。空白或少于两个字符的回答不会自动跳题，其他识别误差最终由选择题纠偏；最多问诊 30 轮。
+客户端 VAD 当前保留约 280 ms 前置音频，并以约 600 ms 静音结束一轮；单段最长 60 秒。`fun-asr-flash-2026-06-15` 是整段音频 HTTP 识别模型，不是持续音频 WebSocket，也不提供本系统所需的服务端 VAD 或逐字实时转写。因此页面只在当前 WAV 识别完成后显示最终文本；“实时转写”不作为产品承诺。每轮使用唯一 `turnId`，重复或迟到结果不能覆盖新一轮。空白或无有效语义的回答不会自动跳题，其他识别误差最终由事实查证页纠偏；最多问诊 30 轮。
 
-问题由一个调度 Agent 负责，不让多个 Agent 同时对用户说话。程序中的 `interview-policy` 决定经营阶段对应的必问字段、字段顺序、每字段最多两问、总轮数和完成条件；Agent 只提取事实与矛盾，并为程序指定字段生成不超过 30 个汉字的口语问题。在线追问调用有 7 秒演示级时限；超时后由确定性策略立即进入下一字段，缺失事实留到选择题纠偏。
+问题由一个调度 Agent 负责，不让多个 Agent 同时对用户说话。程序中的 `interview-policy` 决定经营阶段对应的必问字段、字段顺序、每字段最多两问、总轮数和完成条件；Agent 只提取事实与矛盾，并为程序指定字段生成不超过 30 个汉字的口语问题。在线追问调用有 7 秒演示级时限；超时后由确定性策略立即进入下一字段，缺失事实留到全量事实查证页处理。
 
-播报使用 `stepaudio-2.5-tts`。TTS 播放期间麦克风轨道仍保留，但客户端停止向 ASR 发送音频帧；结束后恢复。因此这是“一次启动、持续会话、轮流说话”，不是多人同声分离，也默认不支持用户打断 AI。
+播报使用 `stepaudio-2.5-tts`。TTS 播放期间麦克风轨道仍保留，但客户端暂停收集用于下一段 ASR 的音频；结束后恢复。因此这是“一次启动、持续会话、轮流说话”，不是多人同声分离，也默认不支持用户打断 AI。
 
-### 3.3 事实纠偏屏
+### 3.3 全量事实查证屏
 
-录音停止后，页面逐张显示事实卡。每张卡提供：
+录音停止后，页面把全部待查证事实一次列出，而不是逐张翻页。每项提供三种处理：
 
 - AI 记录正确；
-- 相邻数值范围；
 - 我不知道；
-- 都不对，重新问这一项。
+- 点击原话框直接编辑。
 
-数字用范围而不是输入框纠正。系统特别处理周期、毛利/成本率、流水/利润、零值/未回答和区间等口径。选择“重新问我”时，只重问当前字段，随后返回纠偏页。
+用户处理完全部项目后只提交一次。编辑后的文字会按事实类型重新解析，不能只改显示文本；系统特别处理周期、毛利/成本率、流水/利润、零值/未回答和区间等口径。查证阶段不再调用 ASR，也不再通过语音重问。
 
-## 4. 语音与 StepFun
+## 4. 语音、DashScope 与 StepFun
 
 ### 4.1 模型
 
@@ -83,18 +83,19 @@ StepFun 服务端 VAD 的静音阈值为 600 ms；最终转写到达后，客户
 |---|---|---|
 |问题调度、事实抽取、方案生成与核验、结果解释|`step-3.7-flash`|Worker HTTP，强制 JSON 输出|
 |问题播报|`stepaudio-2.5-tts`|Worker HTTP 音频代理|
-|连续转写|`stepaudio-2.5-asr-stream`|Worker WebSocket 中继|
+|单轮回答转写|`fun-asr-flash-2026-06-15`|DashScope HTTP，完整 WAV Data URI|
 
-`StepFunClient` 只在服务端读取 Key。结构化文本结果为空、截断或 JSON 不合法时会再尝试一次，并要求模型只返回完整 JSON；推理内容不能被当成最终结构化结果。
+`StepFunClient` 只负责文本 Agent 与 TTS，并只在服务端读取 StepFun Key。结构化文本结果为空、截断或 JSON 不合法时会再尝试一次，并要求模型只返回完整 JSON；推理内容不能被当成最终结构化结果。`DashScopeAsrClient` 独立读取 `DASHSCOPE_API_KEY`，浏览器不能接触任何模型密钥。
 
 ### 4.2 音频生命周期
 
 ```text
-麦克风 PCM
+麦克风 PCM（持续采集）
 → 浏览器内存
-→ Worker WebSocket 中继
-→ StepFun ASR
-→ 增量/最终文本
+→ 客户端 VAD 截出单轮 WAV
+→ Worker HTTP 内存代理
+→ DashScope Fun-ASR-Flash
+→ 该轮最终文本
 → 原始音频丢弃
 ```
 
@@ -103,7 +104,7 @@ StepFun 服务端 VAD 的静音阈值为 600 ms；最终转写到达后，客户
 ### 4.3 语音降级
 
 ```text
-StepFun ASR
+DashScope ASR
 → 失败：浏览器 SpeechRecognition
 → 再失败或权限拒绝：文字回答
 
@@ -174,25 +175,17 @@ StepFun TTS
 
 ### 7.1 搜索结构
 
-目标是得到 3 个经过审计的候选。系统单轮并行进行 3 次生成调用：
-
-1. 广泛探索不同经营杠杆；
-2. 补足第一轮没有覆盖的机制；
-3. 攻击高分方案的隐藏假设；
-4. 改进最有希望的机制并寻找更便宜版本。
-
-每轮执行：
+目标是让 3 条独立流水线各生成一个不同机制的候选并完成审计。系统只运行这一轮，不再迭代搜索 10 条或 20 条方案：
 
 ```text
-5 个生成调用并发
+3 个生成调用并发
 → 程序硬规则核验
-→ 5 个证据/因果核验调用并发
-→ 5 个财务/执行核验调用并发
-→ 保存通过、失败和已探索机制
-→ 下一轮
+→ 3 个证据/因果核验调用并发
+→ 3 个财务/执行核验调用并发
+→ 去重并保存最多 3 个通过方案
 ```
 
-每个进入审计的候选都有两个独立核验结果。若生成 Agent 技术失败、JSON 畸形、方案重复或未过硬门槛，系统使用零预算、可逆、只补证据的安全任务补位，并在 `origin` 和 `degradations` 中显式记录，不把它伪装成正常生成结果。若核验 Agent 仅发生技术或结构失败，只有通过全部程序硬门槛的低风险任务才能以低置信度保留，评分封顶 65；明确的业务否决不会被覆盖。
+每个进入审计的候选都有两个独立核验结果，总计最多 9 次核心 Agent 调用，全局并发不超过 3。若生成 Agent 技术失败、JSON 畸形、方案重复或未过硬门槛，系统使用零预算、可逆、只补证据的安全任务补位，并在 `origin` 和 `degradations` 中显式记录，不把它伪装成正常生成结果。若核验 Agent 仅发生技术或结构失败，只有通过全部程序硬门槛的低风险任务才能以低置信度保留，评分封顶 65；明确的业务否决不会被覆盖。
 
 ### 7.2 硬核验
 
@@ -214,10 +207,11 @@ StepFun TTS
 
 ```mermaid
 flowchart LR
-  B["浏览器"] -->|HTTPS / WebSocket| W["Cloudflare Worker"]
+  B["浏览器"] -->|HTTPS| W["Cloudflare Worker"]
   W --> A["静态 Assets"]
   W --> M["腾讯地图 API"]
   W --> SF["StepFun API"]
+  W --> DS["DashScope ASR API"]
   W --> DB["D1：案卷与分析状态"]
   W --> Q["Queue：yongge-analysis"]
   Q --> C["Queue Consumer"]
@@ -233,7 +227,7 @@ Worker 负责：
 
 - 静态站点；
 - 腾讯地图服务端代理；
-- TTS HTTP 代理与 ASR WebSocket 中继；
+- StepFun TTS HTTP 代理与 DashScope 单段 WAV HTTP 代理；
 - 案卷鉴权、同源检查和限流；
 - 问诊轮次与事实版本；
 - 分析任务创建、进度读取、方案选择和案卷删除。
@@ -248,14 +242,14 @@ D1 保存案卷快照、转写/事实、案卷版本、分析任务、单轮搜�
 
 ### 8.4 AgentGate Durable Object
 
-所有 `step-3.7-flash` 文本模型调用经过同一个命名的 `AgentGate` Durable Object。它把全局活跃调用严格限制在 5 个，并串行维护限流桶。Queue 可以串行推进轮次，单轮内部仍能并发生成或核验。
+所有 `step-3.7-flash` 文本模型调用经过同一个命名的 `AgentGate` Durable Object。它把全局活跃调用严格限制在 5 个，并串行维护限流桶；当前三条方案流水线自身的并发上限仍是 3。Queue 串行推进分析任务，单轮内部仍能并发生成或核验。
 
 ## 9. API 边界
 
 ```text
 POST   /api/cases
 POST   /api/cases/:id/location
-WS     /api/cases/:id/interview
+POST   /api/cases/:id/asr
 POST   /api/cases/:id/turns
 POST   /api/cases/:id/review
 POST   /api/cases/:id/analyze
@@ -279,7 +273,7 @@ POST   /api/tts
 |GPS 拒绝或超时|IP 仅预填城市，要求用户输入并确认详细地址|
 |腾讯地图失败或未配置|接受用户确认的文字位置，明确标注地图未参与|
 |麦克风拒绝|直接切换文字问诊|
-|StepFun ASR 失败|浏览器语音识别，再失败则文字问诊|
+|DashScope ASR 失败|浏览器语音识别，再失败则文字问诊|
 |StepFun TTS 失败|浏览器播报；至少保留屏幕问题|
 |问题调度模型失败|固定问题库继续覆盖经营维度|
 |Agent 方案搜索失败|保留确定性判断并输出低成本补证据方案|
@@ -298,17 +292,17 @@ POST   /api/tts
 |问诊策略|`node test_interview_policy.js`|阶段必问字段、两次拆问、30 轮上限、短问题|
 |服务端适配|`node test_server_decision_adapter.mjs`|忽略客户端计算、服务端重算与完整性判定|
 |StepFun 客户端|`node test_stepfun_client.mjs`|结构化输出、重试、TTS 代理|
+|DashScope ASR 客户端|`node test_dashscope_asr_client.mjs`|鉴权、WAV Data URI、请求格式与响应解析|
 |Agent 搜索|`node test_agent_orchestrator.js`|3 候选、每个双核验、并发不超过 3、硬上限 3|
-|Worker|`node test_worker.mjs`|地图、案卷、鉴权、ASR 协议、AgentGate|
-|浏览器 E2E|`python test_location_e2e.py`|位置、一次启动、降级、纠偏、结果和数字口径|
-|真实 StepFun ASR|`python test_stepfun_asr_live.py`|真实鉴权、TTS→PCM、WebSocket 流式 ASR、最终转写|
+|Worker|`node test_worker.mjs`|地图、案卷、鉴权、单轮 WAV ASR、AgentGate|
+|浏览器 E2E|`python test_location_e2e.py`|位置、一次启动、降级、全量查证、一次提交和数字口径|
 |真实 StepFun 文本/TTS|`node test_stepfun_live.mjs`|真实 JSON 文本调用和 MP3 返回|
 |真实腾讯地图|`node test_worker_live.mjs`|真实地址与周边接口|
 |生产全链路|`python test_production_e2e.py --confirm-paid-analysis`|生产静态页、地图、TTS、事实纠偏、付费 3 方案搜索、方案执行与删除|
 
 所有 Python 命令在本工作区使用 `pyenv shell Agent`。
 
-生产配额当前为全站每天 25 次新完整分析、同一公网 IP 每天 5 次；共享会场 Wi‑Fi 会共享 IP 配额。单案卷最多 3 次 ASR 会话（每次 20 分钟或 40 MiB）及 40 次 TTS。该配置是黑客松 Demo 的成本护栏，可在演示前调整后重新部署。
+生产配额当前为全站每天 25 次新完整分析、同一公网 IP 每天 5 次；共享会场 Wi‑Fi 会共享 IP 配额。单段 ASR 音频上限为 3 MiB，ASR 接口另设每小时限流；每个案卷最多调用 40 次 TTS。该配置是黑客松 Demo 的成本护栏，可在演示前调整后重新部署。
 
 ## 12. 部署边界
 
