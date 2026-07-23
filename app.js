@@ -1,46 +1,280 @@
 const $ = (id) => document.getElementById(id);
 const money = new Intl.NumberFormat("zh-CN", { maximumFractionDigits: 0 });
+const FLOW_ORDER = ["location", "interview", "review", "result"];
+// Keep the question hand-off fast enough for a live demo. StepFun owns the
+// first 600 ms silence window; this small client window only catches a final
+// segment that is immediately followed by speech_started/a second final.
+const REMOTE_VAD_SILENCE_MS = 600;
+const REMOTE_FINAL_SETTLE_MS = 250;
+
 const state = {
+  panel: "location",
   stage: null,
-  step: 1,
+  caseId: null,
+  caseToken: null,
+  caseVersion: 1,
+  firstQuestion: null,
+  localMode: false,
+  locationAttempt: 0,
+  locationCandidate: null,
   locationConfirmed: false,
   mapContextLoaded: false,
-  locationSource: null,
-  approximateLocationLabel: "",
-  locationAttempt: 0,
-  answers: {
-    trafficMatch: null,
-    visibility: null,
-    retention: null
+  interview: {
+    active: false,
+    paused: false,
+    complete: false,
+    questionIndex: -1,
+    turnId: null,
+    mode: "pending",
+    transcript: "",
+    noSpeechCount: 0,
+    reaskFactId: null,
+    pendingFinalTimer: null,
+    pendingTranscript: "",
+    pendingItemId: "",
+    submitInFlight: false
+  },
+  facts: [],
+  transcripts: [],
+  reviewIndex: 0,
+  ws: null,
+  audio: null,
+  recognition: null,
+  analysisTimer: null,
+  footfall: {
+    durationSeconds: 20 * 60,
+    remainingSeconds: 20 * 60,
+    running: false,
+    endAt: null,
+    timerId: null,
+    counts: { passers: 0, targets: 0, seen: 0, entered: 0, orders: 0 }
   }
 };
 
-const numericFields = [
-  "monthlyRevenue", "variableCostRate", "rent", "labor", "otherFixed",
-  "cashReserve", "avgTicket", "plannedCommitment", "debt"
-];
+const QUESTION_BANK = {
+  operating: [
+    ["goal", "你现在最想解决什么：亏损、没客人，还是想增长？", "text", "经营目标"],
+    ["monthlyRevenue", "这家店一个月大约收多少钱？", "money", "月营业额"],
+    ["ordersDaily", "普通一天大约有多少单？", "count", "日订单量"],
+    ["avgTicket", "每一单平均大约多少钱？", "money", "平均客单价"],
+    ["variableCostRate", "每收一百元，食材平台和包装大约花多少？", "rate", "每百元变动成本"],
+    ["rent", "房租和物业平均每个月多少钱？", "money", "月租金及物业"],
+    ["labor", "所有员工工资每月一共多少？", "money", "月员工人工"],
+    ["ownerReplacementWage", "如果请人替代老板和家人，每月要付多少工资？", "money", "老板与家人替代工资"],
+    ["staffCount", "现在一共有几个人长期在店里干活？", "count", "长期工作人员"],
+    ["otherFixed", "水电营销和其他固定支出，每月大约多少？", "money", "其他月固定支出"],
+    ["cashReserve", "现在还能拿出来撑这家店的现金有多少？", "money", "可用现金"],
+    ["debt", "这家店现在还有多少债务或欠款？", "money", "店铺相关债务"],
+    ["channel", "营业额主要来自堂食、外卖，还是别的渠道？", "text", "主要收入渠道"],
+    ["trafficMatch", "店外经过的人，大部分会买你这类产品吗？", "choice", "目标客流匹配"],
+    ["visibility", "从主要来路十秒内能看懂你卖什么和价格吗？", "choice", "门头可见与可理解"],
+    ["retention", "买过的人，后来会再次回来吗？", "choice", "复购表现"],
+    ["initialInvestment", "这家店最开始一共投了多少钱？", "money", "历史总投入"],
+    ["lease", "现在租约还剩多久，提前退出要赔多少？", "text", "租约与退出约束"]
+  ],
+  growth: [
+    ["goal", "你这次最想提升营业额、利润，还是再开一家？", "text", "增长目标"],
+    ["monthlyRevenue", "这家店现在一个月大约收多少钱？", "money", "月营业额"],
+    ["avgTicket", "平均每单大约多少钱？", "money", "平均客单价"],
+    ["variableCostRate", "每收一百元，所有变动成本大约花多少？", "rate", "每百元变动成本"],
+    ["rent", "房租物业平均每月多少钱？", "money", "月租金及物业"],
+    ["labor", "所有员工工资每月一共多少？", "money", "月员工人工"],
+    ["ownerReplacementWage", "老板和家人的劳动按市场价每月值多少？", "money", "老板与家人替代工资"],
+    ["otherFixed", "其他固定开销每月多少？", "money", "其他月固定支出"],
+    ["cashReserve", "可以安全拿来做增长实验的钱有多少？", "money", "可用现金"],
+    ["capacity", "高峰期还能多接单吗，还是已经忙不过来？", "text", "产能瓶颈"],
+    ["trafficMatch", "经过的人里，目标顾客比例高吗？", "choice", "目标客流匹配"],
+    ["visibility", "门头和菜单能让人十秒内做决定吗？", "choice", "门头与菜单转化"],
+    ["retention", "买过的人会稳定复购吗？", "choice", "复购表现"],
+    ["channel", "增长主要想靠堂食、外卖，还是新渠道？", "text", "增长渠道"],
+    ["commitment", "新增投入能不能单独撤回，不影响原店？", "choice", "新增投入可逆性"]
+  ],
+  preopen: [
+    ["goal", "你准备自己开、接转让店，还是加盟？", "text", "开店方式"],
+    ["plannedCommitment", "签约装修设备和加盟全部算上，要投多少钱？", "money", "计划总投入"],
+    ["cashReserve", "不借新债，你现在能拿出多少现金？", "money", "可用现金"],
+    ["debt", "为这家店还准备借多少钱？", "money", "计划负债"],
+    ["rent", "房租物业平均到每个月多少钱？", "money", "月租金及物业"],
+    ["labor", "计划雇用的员工每月工资一共多少？", "money", "计划月员工人工"],
+    ["ownerReplacementWage", "你和家人的劳动按市场价每月值多少？", "money", "老板与家人替代工资"],
+    ["otherFixed", "水电营销和其他固定支出每月多少？", "money", "其他月固定支出"],
+    ["avgTicket", "计划平均每位顾客花多少钱？", "money", "计划客单价"],
+    ["variableCostRate", "每收一百元，食材平台包装预计花多少？", "rate", "每百元变动成本"],
+    ["transferFee", "转让费、加盟费和强制采购分别有多少？", "money", "转让加盟等费用"],
+    ["lease", "租期、押金和提前退出条款是什么？", "text", "租约与退出约束"],
+    ["trafficMatch", "这个位置经过的人真是你的目标顾客吗？", "choice", "目标客流匹配"],
+    ["visibility", "顾客从主要来路能直接看到店和价格吗？", "choice", "门店可见性"],
+    ["retention", "你做过真实收钱的试卖或预售吗？", "choice", "真实付费验证"]
+  ]
+};
 
-function setStep(step) {
-  state.step = step;
-  document.querySelectorAll("[data-step]").forEach((panel) => {
-    const active = Number(panel.dataset.step) === step;
-    panel.hidden = !active;
-    panel.classList.toggle("active", active);
-  });
-  document.querySelectorAll("[data-progress]").forEach((item) => {
-    item.classList.toggle("active", Number(item.dataset.progress) <= step);
-  });
-  document.querySelector(`[data-step="${step}"]`)?.scrollIntoView({ behavior: "smooth", block: "start" });
+const FACT_LABELS = Object.fromEntries(
+  Object.values(QUESTION_BANK).flat().map(([id, , , label]) => [id, label])
+);
+
+function escapeHtml(value) {
+  return String(value ?? "").replace(/[&<>"']/g, (char) => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#039;"
+  }[char]));
 }
 
-function setStage(stage) {
-  state.stage = stage;
-  document.querySelectorAll(".operating-only").forEach((el) => { el.hidden = stage !== "operating"; });
-  document.querySelectorAll(".preopen-only").forEach((el) => { el.hidden = stage !== "preopen"; });
-  $("thirdQuestion").textContent = stage === "preopen"
-    ? "你做过真实试卖，而不是只问朋友“觉得怎么样”吗？"
-    : "买过的人，会再次回来吗？";
-  setStep(2);
+function setPanel(panel) {
+  state.panel = panel;
+  document.querySelectorAll("[data-panel]").forEach((element) => {
+    const active = element.dataset.panel === panel;
+    element.hidden = !active;
+    element.classList.toggle("active", active);
+  });
+  const activeIndex = FLOW_ORDER.indexOf(panel);
+  document.querySelectorAll("[data-progress]").forEach((element) => {
+    element.classList.toggle("active", FLOW_ORDER.indexOf(element.dataset.progress) <= activeIndex);
+  });
+  const titles = {
+    location: "先确认店铺位置",
+    interview: "直接回答，不用再点按钮",
+    review: "只改明显不对的事实",
+    result: "算账、搜索，再核验"
+  };
+  $("flowTitle").textContent = titles[panel];
+  if ($("footfallTool")) {
+    $("footfallTool").hidden = !state.locationConfirmed || ["interview", "review"].includes(panel);
+  }
+  document.querySelector(`[data-panel="${panel}"]`)?.scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+function formatClock(seconds) {
+  const safe = Math.max(0, Math.ceil(seconds));
+  return `${String(Math.floor(safe / 60)).padStart(2, "0")}:${String(safe % 60).padStart(2, "0")}`;
+}
+
+function conversionRate(numerator, denominator) {
+  if (!denominator) return null;
+  return (numerator / denominator) * 100;
+}
+
+function stopFootfallTimer() {
+  if (state.footfall.timerId) clearInterval(state.footfall.timerId);
+  state.footfall.timerId = null;
+}
+
+function storeFootfallEvidence(final = false) {
+  const labels = {
+    passers: "20分钟经过人数",
+    targets: "20分钟目标顾客人数",
+    seen: "20分钟看见门头人数",
+    entered: "20分钟进店人数",
+    orders: "20分钟下单人数"
+  };
+  Object.entries(state.footfall.counts).forEach(([field, value]) => {
+    upsertFact({
+      id: `footfall_${field}`,
+      label: labels[field],
+      kind: "count",
+      value,
+      status: final ? "confirmed" : "provisional",
+      source: "choice",
+      evidence: final ? "B" : "C",
+      period: "20m",
+      raw: "现场手动计数"
+    });
+  });
+}
+
+function renderFootfall() {
+  const { counts, remainingSeconds, running, durationSeconds } = state.footfall;
+  $("footfallClock").textContent = formatClock(remainingSeconds);
+  $("footfallTimerStatus").textContent = running
+    ? "计时中 · 点击对应阶段加 1"
+    : remainingSeconds <= 0
+      ? "本次 20 分钟观察已完成"
+      : remainingSeconds < durationSeconds ? "已暂停，可继续" : "尚未开始";
+  $("footfallStart").textContent = remainingSeconds < durationSeconds && remainingSeconds > 0 ? "继续计时" : "开始 20 分钟";
+  $("footfallStart").disabled = running || remainingSeconds <= 0;
+  $("footfallPause").disabled = !running;
+  document.querySelectorAll("[data-footfall-count]").forEach((button) => {
+    button.classList.toggle("enabled", running);
+    button.setAttribute("aria-disabled", String(!running));
+  });
+  $("footfallPassers").textContent = counts.passers;
+  $("footfallTargets").textContent = counts.targets;
+  $("footfallSeen").textContent = counts.seen;
+  $("footfallEntered").textContent = counts.entered;
+  $("footfallOrders").textContent = counts.orders;
+
+  const rates = [
+    ["目标客群 / 经过", conversionRate(counts.targets, counts.passers)],
+    ["看见 / 目标客群", conversionRate(counts.seen, counts.targets)],
+    ["进店 / 看见", conversionRate(counts.entered, counts.seen)],
+    ["下单 / 进店", conversionRate(counts.orders, counts.entered)],
+    ["总成交 / 经过", conversionRate(counts.orders, counts.passers)]
+  ];
+  $("footfallRates").innerHTML = rates.map(([label, rate]) => `
+    <article><span>${label}</span><strong>${rate == null ? "—" : `${rate.toFixed(1)}%`}</strong></article>
+  `).join("");
+  const total = Object.values(counts).reduce((sum, value) => sum + value, 0);
+  $("footfallSummaryCount").textContent = total ? `${counts.passers} 人经过 · ${counts.orders} 人下单` : "尚未计数";
+
+  if ($("footfallResultEvidence")) {
+    $("footfallResultEvidence").innerHTML = total ? `
+      <span class="section-kicker">现场五段转化证据</span>
+      <p><b>${counts.passers}</b> 人经过，<b>${counts.targets}</b> 人属于目标客群，<b>${counts.seen}</b> 人看见门头，<b>${counts.entered}</b> 人进店，<b>${counts.orders}</b> 人下单。总成交转化为 <b>${rates[4][1] == null ? "待补" : `${rates[4][1].toFixed(1)}%`}</b>。</p>
+    ` : `
+      <span class="section-kicker">现场五段转化证据</span>
+      <p>尚未进行 20 分钟现场计数。地图 POI 不能代替这项证据。</p>
+    `;
+  }
+}
+
+function tickFootfall() {
+  if (!state.footfall.running || !state.footfall.endAt) return;
+  state.footfall.remainingSeconds = Math.max(0, Math.ceil((state.footfall.endAt - Date.now()) / 1000));
+  if (state.footfall.remainingSeconds <= 0) {
+    state.footfall.running = false;
+    state.footfall.endAt = null;
+    stopFootfallTimer();
+    storeFootfallEvidence(true);
+  }
+  renderFootfall();
+}
+
+function startFootfall() {
+  if (!state.locationConfirmed || state.footfall.running || state.footfall.remainingSeconds <= 0) return;
+  state.footfall.running = true;
+  state.footfall.endAt = Date.now() + state.footfall.remainingSeconds * 1000;
+  stopFootfallTimer();
+  state.footfall.timerId = setInterval(tickFootfall, 250);
+  renderFootfall();
+}
+
+function pauseFootfall() {
+  if (!state.footfall.running) return;
+  state.footfall.remainingSeconds = Math.max(0, Math.ceil((state.footfall.endAt - Date.now()) / 1000));
+  state.footfall.running = false;
+  state.footfall.endAt = null;
+  stopFootfallTimer();
+  storeFootfallEvidence(false);
+  renderFootfall();
+}
+
+function resetFootfall() {
+  stopFootfallTimer();
+  state.footfall = {
+    durationSeconds: 20 * 60,
+    remainingSeconds: 20 * 60,
+    running: false,
+    endAt: null,
+    timerId: null,
+    counts: { passers: 0, targets: 0, seen: 0, entered: 0, orders: 0 }
+  };
+  state.facts = state.facts.filter((fact) => !String(fact.id).startsWith("footfall_"));
+  state.caseVersion += 1;
+  renderFootfall();
+}
+
+function incrementFootfall(field) {
+  if (!state.footfall.running || !(field in state.footfall.counts)) return;
+  state.footfall.counts[field] += 1;
+  renderFootfall();
 }
 
 function setLocationStatus(kind, message) {
@@ -50,36 +284,85 @@ function setLocationStatus(kind, message) {
   box.querySelector("p").textContent = message;
 }
 
-function acceptLocation(source) {
-  state.locationConfirmed = true;
-  state.locationSource = source;
-  $("locationNext").disabled = false;
+function chooseStage(stage) {
+  state.stage = stage;
+  document.querySelectorAll("[data-stage]").forEach((button) => {
+    button.classList.toggle("selected", button.dataset.stage === stage);
+  });
+  updateBeginState();
 }
 
-function renderMapContext(data) {
+function updateBeginState() {
+  $("beginInterview").disabled = !(state.stage && state.locationConfirmed);
+}
+
+function mapContextToCandidate(data, source) {
   const context = data.context || {};
   const location = context.location || {};
   const nearby = context.nearby || {};
-  $("mapAddress").textContent = location.address || "已取得当前位置";
-  $("mapDistrict").textContent = [location.city, location.district].filter(Boolean).join(" · ") || "坐标已确认";
-  $("mapCompetitors").textContent = Number.isFinite(nearby.count) ? `${nearby.count} 个` : "已读取";
-  const tags = [...(nearby.places || []), ...(context.landmarks || [])]
-    .filter((item, index, all) => {
-      const title = item.title || item;
-      return title && all.findIndex((candidate) => (candidate.title || candidate) === title) === index;
-    })
-    .slice(0, 7);
-  $("nearbyTags").innerHTML = tags.length
-    ? tags.map((item) => `<span>${escapeHtml(item.title || item)}</span>`).join("")
-    : "<span>周边地点已读取</span>";
-  $("mapSummary").hidden = false;
-  state.mapContextLoaded = true;
+  return {
+    source,
+    address: location.address || $("manualLocation").value.trim() || "已取得当前位置",
+    city: location.city || "",
+    district: location.district || "",
+    nearbyCount: Number.isFinite(nearby.count) ? nearby.count : null,
+    places: [...(nearby.places || []), ...(context.landmarks || [])]
+  };
 }
 
-function escapeHtml(value) {
-  return String(value).replace(/[&<>"']/g, (char) => ({
-    "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#039;"
-  }[char]));
+function renderMapCandidate(candidate) {
+  state.locationCandidate = candidate;
+  $("mapAddress").textContent = candidate.address;
+  $("mapDistrict").textContent = [candidate.city, candidate.district].filter(Boolean).join(" · ") || "位置待你确认";
+  $("mapCompetitors").textContent = Number.isFinite(candidate.nearbyCount) ? `${candidate.nearbyCount} 个` : "未读取";
+  const names = candidate.places
+    .map((item) => item.title || item)
+    .filter((name, index, all) => name && all.indexOf(name) === index)
+    .slice(0, 7);
+  $("nearbyTags").innerHTML = names.length
+    ? names.map((name) => `<span>${escapeHtml(name)}</span>`).join("")
+    : "<span>周边数据未参与判断</span>";
+  $("mapSummary").hidden = false;
+}
+
+function confirmLocation() {
+  if (!state.locationCandidate) return;
+  state.locationConfirmed = true;
+  $("locationProof").hidden = false;
+  $("locationProofText").textContent = state.locationCandidate.address;
+  $("confirmLocation").textContent = "位置已确认";
+  $("confirmLocation").disabled = true;
+  setLocationStatus("success", "位置已由你确认，可以开始问诊。");
+  $("footfallTool").hidden = false;
+  renderFootfall();
+  upsertFact({
+    id: "location",
+    label: "店铺位置",
+    kind: "text",
+    value: state.locationCandidate.address,
+    status: "confirmed",
+    source: "map",
+    evidence: state.locationCandidate.source === "manual-unverified" ? "C" : "B"
+  });
+  updateBeginState();
+}
+
+async function fetchJson(url, options = {}, timeoutMs = 8000) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(url, { ...options, signal: controller.signal });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      const error = new Error(data.message || `请求失败（${response.status}）`);
+      error.status = response.status;
+      error.code = data.code;
+      throw error;
+    }
+    return data;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 async function fetchMapContext(latitude, longitude) {
@@ -88,21 +371,7 @@ async function fetchMapContext(latitude, longitude) {
     lng: longitude.toFixed(6),
     category: $("category").value.trim() || "餐饮"
   });
-  const response = await fetch(`/api/map/context?${params}`, {
-    headers: { "Accept": "application/json" }
-  });
-  const data = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(data.message || "腾讯地图暂时不可用");
-  return data;
-}
-
-async function fetchApproximateLocation() {
-  const response = await fetch("/api/map/ip-location", {
-    headers: { "Accept": "application/json" }
-  });
-  const data = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(data.message || "无法识别大致城市");
-  return data.approximate || {};
+  return fetchJson(`/api/map/context?${params}`);
 }
 
 async function fetchAddressContext(address) {
@@ -110,64 +379,36 @@ async function fetchAddressContext(address) {
     address,
     category: $("category").value.trim() || "餐饮"
   });
-  const response = await fetch(`/api/map/address-context?${params}`, {
-    headers: { "Accept": "application/json" }
-  });
-  const data = await response.json().catch(() => ({}));
-  if (!response.ok) {
-    const error = new Error(data.message || "地址解析暂时不可用");
-    error.code = data.code || "ADDRESS_LOOKUP_ERROR";
-    error.status = response.status;
-    throw error;
-  }
-  return data;
-}
-
-function openManualLocation() {
-  $("manualLocationDetails").open = true;
-  requestAnimationFrame(() => {
-    $("manualLocation").focus();
-    const end = $("manualLocation").value.length;
-    $("manualLocation").setSelectionRange?.(end, end);
-  });
+  return fetchJson(`/api/map/address-context?${params}`);
 }
 
 async function offerLocationFallback(reason, attempt) {
   if (attempt !== state.locationAttempt) return;
-  openManualLocation();
-  setLocationStatus("loading", `${reason} 正在尝试识别你所在的城市…`);
+  $("manualLocationDetails").open = true;
+  setLocationStatus("notice", `${reason} 请直接输入店铺地址。`);
   try {
-    const approximate = await fetchApproximateLocation();
+    const data = await fetchJson("/api/map/ip-location", {}, 4000);
     if (attempt !== state.locationAttempt) return;
+    const approximate = data.approximate || {};
     const label = approximate.label || [approximate.city, approximate.district].filter(Boolean).join("");
-    state.approximateLocationLabel = label;
     if (!$("manualLocation").value.trim() && label) $("manualLocation").value = `${label} `;
-    $("manualLocationHint").textContent = `已大致识别为 ${label || "当前城市"}。请在后面补充商圈、路名或门牌号；大致城市不会被当成店铺位置。`;
-    setLocationStatus("notice", `精确定位失败；已识别大致在 ${label || "当前城市"}。请补充店铺地址。`);
-  } catch (error) {
-    if (attempt !== state.locationAttempt) return;
-    state.approximateLocationLabel = "";
-    $("manualLocationHint").textContent = "请写下城市和商圈，最好补充路名或门牌号；系统会自动查找附近同类店。";
-    setLocationStatus("error", `${reason} ${error.message}，请手动输入店铺地址。`);
+    $("manualLocationHint").textContent = `大致识别为 ${label || "当前城市"}。请补充商圈、路名或门牌号；大致城市不会被当成店铺位置。`;
+  } catch (_) {
+    $("manualLocationHint").textContent = "请写下城市、商圈、路名或门牌号。地图不可用时仍可保留手动地址。";
   } finally {
-    if (attempt !== state.locationAttempt) return;
     $("locateButton").disabled = false;
-    $("locateButton").setAttribute("aria-busy", "false");
-    openManualLocation();
   }
 }
 
 function locateCurrentStore() {
   const attempt = ++state.locationAttempt;
-  state.mapContextLoaded = false;
   state.locationConfirmed = false;
-  state.locationSource = null;
-  state.approximateLocationLabel = "";
-  $("locationNext").disabled = true;
+  state.locationCandidate = null;
+  $("locationProof").hidden = true;
   $("mapSummary").hidden = true;
   $("locateButton").disabled = true;
-  $("locateButton").setAttribute("aria-busy", "true");
-  setLocationStatus("loading", "正在取得当前位置并读取腾讯地图周边信息…");
+  updateBeginState();
+  setLocationStatus("loading", "正在取得当前位置并读取腾讯地图周边…");
   if (!navigator.geolocation) {
     void offerLocationFallback("当前浏览器不支持精确定位。", attempt);
     return;
@@ -177,273 +418,1447 @@ function locateCurrentStore() {
     try {
       const data = await fetchMapContext(position.coords.latitude, position.coords.longitude);
       if (attempt !== state.locationAttempt) return;
-      renderMapContext(data);
-      acceptLocation("gps");
-      setLocationStatus("success", "定位成功，腾讯地图周边信息已读取。");
+      state.mapContextLoaded = true;
+      renderMapCandidate(mapContextToCandidate(data, "gps"));
+      setLocationStatus("notice", "地图已找到位置，请确认是不是这家店。");
     } catch (error) {
-      if (attempt !== state.locationAttempt) return;
-      acceptLocation("gps-without-map");
-      state.mapContextLoaded = false;
-      setLocationStatus("notice", `精确位置已取得；${error.message}。地图周边未参与，仍可继续判断。`);
-      $("mapAddress").textContent = "精确位置已取得";
-      $("mapDistrict").textContent = "腾讯地图暂时未核验";
-      $("mapCompetitors").textContent = "未读取";
-      $("nearbyTags").innerHTML = "<span>地图数据未参与本次判断</span>";
-      $("mapSummary").hidden = false;
+      renderMapCandidate({
+        source: "gps-without-map",
+        address: "精确坐标已取得，地图暂时无法解析",
+        city: "",
+        district: "",
+        nearbyCount: null,
+        places: []
+      });
+      setLocationStatus("notice", `${error.message}。你仍可确认坐标，或改用手动地址。`);
     } finally {
-      if (attempt !== state.locationAttempt) return;
       $("locateButton").disabled = false;
-      $("locateButton").setAttribute("aria-busy", "false");
     }
   }, (error) => {
-    if (attempt !== state.locationAttempt) return;
-    const messages = {
-      1: "没有取得精确定位权限。",
-      2: "浏览器暂时无法取得精确位置。",
-      3: "精确定位超时。"
-    };
-    void offerLocationFallback(messages[error.code] || "精确定位失败。", attempt);
-  }, {
-    enableHighAccuracy: true,
-    timeout: 10000,
-    maximumAge: 60000
-  });
+    const labels = { 1: "没有取得精确定位权限。", 2: "暂时无法取得精确位置。", 3: "精确定位超时。" };
+    void offerLocationFallback(labels[error.code] || "精确定位失败。", attempt);
+  }, { enableHighAccuracy: true, timeout: 10000, maximumAge: 60000 });
 }
 
 async function useManualLocation() {
-  const description = $("manualLocation").value.trim();
-  if (!description) {
+  const address = $("manualLocation").value.trim();
+  if (!address) {
     setLocationStatus("error", "请先写下城市、商圈或详细地址。");
-    openManualLocation();
     return;
   }
-  if (state.approximateLocationLabel && description === state.approximateLocationLabel) {
-    setLocationStatus("notice", "现在只有大致城市，请再补充商圈、路名或门牌号。");
-    openManualLocation();
-    return;
-  }
-
   const attempt = ++state.locationAttempt;
-  $("locateButton").disabled = false;
-  $("locateButton").setAttribute("aria-busy", "false");
+  state.locationConfirmed = false;
+  $("locationProof").hidden = true;
   $("useManualLocation").disabled = true;
-  $("useManualLocation").setAttribute("aria-busy", "true");
-  $("locationNext").disabled = true;
-  setLocationStatus("loading", "正在查找这个地址和附近同类店…");
+  updateBeginState();
+  setLocationStatus("loading", "正在查找这个地址和周边地点…");
   try {
-    const data = await fetchAddressContext(description);
+    const data = await fetchAddressContext(address);
     if (attempt !== state.locationAttempt) return;
-    renderMapContext(data);
-    acceptLocation("address");
-    setLocationStatus("success", "地址已确认，腾讯地图周边信息已读取。");
+    state.mapContextLoaded = true;
+    renderMapCandidate(mapContextToCandidate(data, "address"));
+    setLocationStatus("notice", "地图已找到地址，请确认是不是这家店。");
   } catch (error) {
     if (attempt !== state.locationAttempt) return;
-    if (Number(error.status) < 500) {
-      state.locationConfirmed = false;
-      state.locationSource = null;
-      state.mapContextLoaded = false;
-      $("locationNext").disabled = true;
+    if (Number(error.status) >= 400 && Number(error.status) < 500) {
       setLocationStatus("error", error.message);
-      openManualLocation();
       return;
     }
-    // A map outage should not trap the user. Keep the manually supplied
-    // evidence, but label it clearly so downstream confidence is reduced.
-    acceptLocation("manual-unverified");
-    state.mapContextLoaded = false;
-    $("mapAddress").textContent = description;
-    $("mapDistrict").textContent = "手动提供，地图未核验";
-    $("mapCompetitors").textContent = "未读取";
-    $("nearbyTags").innerHTML = "<span>地图数据未参与本次判断</span>";
-    $("mapSummary").hidden = false;
-    setLocationStatus("notice", `${error.message}。已保留手动地址，仍可继续判断。`);
+    renderMapCandidate({
+      source: "manual-unverified",
+      address,
+      city: "",
+      district: "手动提供，地图未核验",
+      nearbyCount: null,
+      places: []
+    });
+    setLocationStatus("notice", "腾讯地图暂时不可用。已保留手动地址，请确认。");
   } finally {
-    if (attempt !== state.locationAttempt) return;
     $("useManualLocation").disabled = false;
-    $("useManualLocation").setAttribute("aria-busy", "false");
   }
 }
 
-function fieldKnown(id) {
-  return $(id).value.trim() !== "";
-}
-
-function collectInput() {
-  const values = Object.fromEntries(numericFields.map((id) => [id, Number($(id).value) || 0]));
-  return {
-    ...values,
-    stage: state.stage,
-    category: $("category").value.trim(),
-    locationConfirmed: state.locationConfirmed,
-    mapContextLoaded: state.mapContextLoaded,
-    trafficMatch: state.answers.trafficMatch,
-    visibility: state.answers.visibility,
-    retention: state.answers.retention,
-    known: Object.fromEntries(numericFields.map((id) => [id, fieldKnown(id)]))
+function upsertFact(fact) {
+  const existing = state.facts.findIndex((item) => item.id === fact.id);
+  const definition = Object.values(QUESTION_BANK)
+    .flat()
+    .find(([id]) => id === fact.id);
+  const next = {
+    status: "provisional",
+    source: "voice",
+    evidence: "C",
+    raw: "",
+    kind: definition?.[2] || "text",
+    label: definition?.[3] || FACT_LABELS[fact.id] || fact.field || fact.id,
+    updatedAt: new Date().toISOString(),
+    ...fact
   };
+  next.field = next.field || next.id;
+  next.evidenceGrade = next.evidenceGrade || next.evidence;
+  next.rawTranscript = next.rawTranscript ?? next.raw;
+  next.unit = next.unit || ({ money: "CNY", rate: "%", count: "count" })[next.kind] || null;
+  if (existing >= 0) state.facts.splice(existing, 1, { ...state.facts[existing], ...next });
+  else state.facts.push(next);
+  state.caseVersion += 1;
+  return next;
 }
 
-function validateMoney() {
-  const required = state.stage === "operating"
-    ? ["monthlyRevenue", "variableCostRate", "rent", "labor", "otherFixed", "cashReserve", "avgTicket"]
-    : ["variableCostRate", "rent", "labor", "otherFixed", "cashReserve", "avgTicket", "plannedCommitment"];
-  const missing = required.filter((id) => !fieldKnown(id));
-  if (missing.length) {
-    $("moneyError").textContent = "还有数字没填。确实为 0 时请填 0，不要留空。";
-    $(missing[0]).focus();
-    return false;
+function questionList() {
+  return QUESTION_BANK[state.stage] || QUESTION_BANK.operating;
+}
+
+function questionAt(index) {
+  const row = questionList()[index];
+  return row ? { id: row[0], text: row[1], kind: row[2], label: row[3] } : null;
+}
+
+async function createCase() {
+  const category = $("category").value.trim() || "餐饮";
+  upsertFact({ id: "stage", label: "经营阶段", kind: "text", value: state.stage, status: "confirmed", source: "choice", evidence: "B" });
+  upsertFact({ id: "category", label: "经营品类", kind: "text", value: category, status: "confirmed", source: "typed", evidence: "B" });
+  try {
+    const data = await fetchJson("/api/cases", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Accept": "application/json" },
+      body: JSON.stringify({
+        stage: state.stage,
+        category,
+        location: state.locationCandidate,
+        clientVersion: "2.1"
+      })
+    }, 5000);
+    state.caseId = data.caseId || data.id || data.case?.id;
+    state.caseToken = data.caseToken || data.token || null;
+    if (data.case?.version) state.caseVersion = data.case.version;
+    if (!state.caseId) throw new Error("服务端没有返回案卷编号");
+    if (!state.caseToken) throw new Error("服务端没有返回案卷令牌");
+    state.localMode = false;
+    const located = await fetchJson(`/api/cases/${encodeURIComponent(state.caseId)}/location`, {
+      method: "POST",
+      headers: caseHeaders({ "Content-Type": "application/json" }),
+      body: JSON.stringify({
+        confirmed: true,
+        context: {
+          location: {
+            address: state.locationCandidate?.address || "",
+            city: state.locationCandidate?.city || "",
+            district: state.locationCandidate?.district || "",
+            source: state.locationCandidate?.source || "unknown"
+          },
+          nearby: {
+            count: state.locationCandidate?.nearbyCount,
+            places: state.locationCandidate?.places || []
+          }
+        }
+      })
+    }, 5000);
+    state.firstQuestion = located.firstQuestion || null;
+    if (located.version) state.caseVersion = located.version;
+  } catch (_) {
+    state.caseId = `local-${Date.now()}`;
+    state.caseToken = null;
+    state.localMode = true;
   }
-  const rate = Number($("variableCostRate").value);
-  if (rate <= 0 || rate >= 100) {
-    $("moneyError").textContent = "每卖 100 元的食材和平台成本必须在 1—95 元之间。";
-    $("variableCostRate").focus();
-    return false;
+}
+
+function caseHeaders(extra = {}) {
+  return state.caseToken ? { ...extra, "X-Case-Token": state.caseToken } : extra;
+}
+
+class ContinuousAudio {
+  constructor() {
+    this.stream = null;
+    this.context = null;
+    this.processor = null;
+    this.sendEnabled = false;
   }
-  $("moneyError").textContent = "";
+
+  async start() {
+    this.stream = await navigator.mediaDevices.getUserMedia({
+      audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+      video: false
+    });
+    const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+    if (!AudioContextClass) return;
+    this.context = new AudioContextClass();
+    await this.context.resume();
+    const source = this.context.createMediaStreamSource(this.stream);
+    this.processor = this.context.createScriptProcessor(4096, 1, 1);
+    const silent = this.context.createGain();
+    silent.gain.value = 0;
+    this.processor.onaudioprocess = (event) => {
+      if (!this.sendEnabled || !state.ws || state.ws.readyState !== WebSocket.OPEN) return;
+      const mono = event.inputBuffer.getChannelData(0);
+      const samples = downsample(mono, this.context.sampleRate, 16000);
+      const pcm = floatToPcm16(samples);
+      state.ws.send(JSON.stringify({
+        type: "input_audio_buffer.append",
+        audio: arrayBufferToBase64(pcm)
+      }));
+    };
+    source.connect(this.processor);
+    this.processor.connect(silent);
+    silent.connect(this.context.destination);
+  }
+
+  setSending(enabled) {
+    this.sendEnabled = Boolean(enabled);
+  }
+
+  stop() {
+    this.sendEnabled = false;
+    if (this.processor) this.processor.disconnect();
+    if (this.stream) this.stream.getTracks().forEach((track) => track.stop());
+    if (this.context) void this.context.close();
+    this.processor = null;
+    this.stream = null;
+    this.context = null;
+  }
+}
+
+function downsample(buffer, inputRate, outputRate) {
+  if (inputRate === outputRate) return buffer;
+  const ratio = inputRate / outputRate;
+  const length = Math.max(1, Math.round(buffer.length / ratio));
+  const result = new Float32Array(length);
+  for (let i = 0; i < length; i += 1) {
+    const start = Math.floor(i * ratio);
+    const end = Math.min(buffer.length, Math.floor((i + 1) * ratio));
+    let total = 0;
+    for (let j = start; j < end; j += 1) total += buffer[j];
+    result[i] = total / Math.max(1, end - start);
+  }
+  return result;
+}
+
+function floatToPcm16(samples) {
+  const output = new ArrayBuffer(samples.length * 2);
+  const view = new DataView(output);
+  for (let i = 0; i < samples.length; i += 1) {
+    const value = Math.max(-1, Math.min(1, samples[i]));
+    view.setInt16(i * 2, value < 0 ? value * 0x8000 : value * 0x7fff, true);
+  }
+  return output;
+}
+
+function arrayBufferToBase64(buffer) {
+  const bytes = new Uint8Array(buffer);
+  let binary = "";
+  const chunk = 0x8000;
+  for (let offset = 0; offset < bytes.length; offset += chunk) {
+    binary += String.fromCharCode(...bytes.subarray(offset, offset + chunk));
+  }
+  return btoa(binary);
+}
+
+function webSocketUrl(caseId) {
+  const protocol = location.protocol === "https:" ? "wss:" : "ws:";
+  const token = encodeURIComponent(state.caseToken || "");
+  return `${protocol}//${location.host}/api/cases/${encodeURIComponent(caseId)}/interview?token=${token}`;
+}
+
+async function connectInterviewSocket() {
+  if (state.localMode) return false;
+  return new Promise((resolve) => {
+    let settled = false;
+    const socket = new WebSocket(webSocketUrl(state.caseId));
+    socket.binaryType = "arraybuffer";
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      socket.close();
+      resolve(false);
+    }, 4500);
+    socket.onopen = () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      state.ws = socket;
+      socket.send(JSON.stringify({
+        type: "session.start",
+        caseVersion: state.caseVersion,
+        audio: { format: "pcm16", sampleRate: 16000, vadSilenceMs: REMOTE_VAD_SILENCE_MS },
+        facts: state.facts
+      }));
+      resolve(true);
+    };
+    socket.onmessage = (event) => {
+      if (typeof event.data !== "string") return;
+      let message;
+      try { message = JSON.parse(event.data); } catch (_) { return; }
+      handleServerEvent(message);
+    };
+    socket.onclose = () => {
+      if (!state.interview.complete && state.interview.active && !state.localMode) activateLocalFallback("语音连接中断，已切换到本机问诊。");
+    };
+    socket.onerror = () => {
+      if (!settled) {
+        settled = true;
+        clearTimeout(timer);
+        resolve(false);
+      }
+    };
+  });
+}
+
+function handleServerEvent(message) {
+  const type = message.type || "";
+  if (type === "input_audio_buffer.speech_started" || type === "speech_started") {
+    if (state.interview.pendingFinalTimer) {
+      clearTimeout(state.interview.pendingFinalTimer);
+      state.interview.pendingFinalTimer = null;
+    }
+    setListening("live", "正在听你继续说");
+    return;
+  }
+  if (type === "transcript.delta" || type === "conversation.item.input_audio_transcription.delta") {
+    const delta = message.text ?? message.delta ?? "";
+    state.interview.transcript = message.text != null
+      ? message.text
+      : `${state.interview.transcript}${delta}`;
+    const visible = [state.interview.pendingTranscript, state.interview.transcript]
+      .filter(Boolean)
+      .join(" ");
+    $("liveTranscript").textContent = visible || "正在听…";
+    return;
+  }
+  if (type === "transcript.final" || type === "conversation.item.input_audio_transcription.completed") {
+    scheduleRemoteFinal(message);
+    return;
+  }
+  if (type === "question") {
+    askQuestion({ id: message.factId, text: message.text, kind: message.kind, label: message.label }, message.index);
+    return;
+  }
+  if (type === "interview.complete") {
+    if (Array.isArray(message.facts)) message.facts.forEach(upsertFact);
+    finishInterview();
+    return;
+  }
+  if (type === "error") {
+    $("interviewNotice").textContent = message.message || "语音服务出现问题，已保留现有答案。";
+  }
+}
+
+function scheduleRemoteFinal(message) {
+  const finalText = String(message.text || message.transcript || "").trim();
+  if (!finalText || !state.interview.active) return;
+  const itemId = String(message.item_id || message.itemId || message.turnId || message.event_id || "");
+  const sameItem = itemId && itemId === state.interview.pendingItemId;
+  if (sameItem || !state.interview.pendingTranscript) {
+    state.interview.pendingTranscript = finalText;
+  } else if (!state.interview.pendingTranscript.includes(finalText)) {
+    state.interview.pendingTranscript = `${state.interview.pendingTranscript} ${finalText}`.trim();
+  }
+  state.interview.pendingItemId = itemId;
+  state.interview.transcript = finalText;
+  $("liveTranscript").textContent = state.interview.pendingTranscript;
+  if (state.interview.pendingFinalTimer) clearTimeout(state.interview.pendingFinalTimer);
+  const snapshot = {
+    turnId: state.interview.turnId,
+    questionId: $("currentQuestion").dataset.factId,
+    question: $("currentQuestion").textContent,
+    caseVersion: state.caseVersion
+  };
+  // StepFun can emit a final segment and immediately reopen VAD when the user
+  // only paused briefly. Keep a short merge window instead of submitting on
+  // the same tick; speech_started cancels this timer and the next final is
+  // appended to the same answer.
+  state.interview.pendingFinalTimer = setTimeout(() => {
+    state.interview.pendingFinalTimer = null;
+    if (!state.interview.active || state.interview.paused || state.interview.submitInFlight) return;
+    const transcript = state.interview.pendingTranscript.trim();
+    state.interview.pendingTranscript = "";
+    state.interview.pendingItemId = "";
+    if (!transcript) return;
+    state.transcripts.push({ turnId: snapshot.turnId, text: transcript, question: snapshot.question });
+    void submitRemoteTurn(transcript, snapshot);
+  }, REMOTE_FINAL_SETTLE_MS);
+}
+
+async function submitRemoteTurn(transcript, snapshot = {}) {
+  if (!state.caseId || !state.caseToken) return;
+  if (state.interview.submitInFlight) return;
+  state.interview.submitInFlight = true;
+  state.audio?.setSending(false);
+  setListening("", "正在整理答案");
+  try {
+    const data = await fetchJson(`/api/cases/${encodeURIComponent(state.caseId)}/turns`, {
+      method: "POST",
+      headers: caseHeaders({ "Content-Type": "application/json", "Accept": "application/json" }),
+      body: JSON.stringify({
+        turnId: snapshot.turnId || state.interview.turnId,
+        questionId: snapshot.questionId || $("currentQuestion").dataset.factId,
+        question: snapshot.question || $("currentQuestion").textContent,
+        transcript,
+        caseVersion: snapshot.caseVersion || state.caseVersion
+      })
+    }, 12000);
+    if (Array.isArray(data.facts)) data.facts.forEach(upsertFact);
+    if (Array.isArray(data.extractedFacts)) data.extractedFacts.forEach(upsertFact);
+    if (data.fact) upsertFact(data.fact);
+    if (data.version || data.case?.version) state.caseVersion = data.version || data.case.version;
+    if (data.complete || data.interviewComplete) {
+      finishInterview();
+      return;
+    }
+    const next = data.nextQuestion || data.question;
+    if (next) {
+      askQuestion({
+        id: next.factId || next.id || next.field,
+        text: next.text,
+        kind: next.kind || "text",
+        label: next.label
+      }, Number.isFinite(next.index) ? next.index : state.interview.questionIndex + 1);
+    }
+  } catch (error) {
+    activateLocalFallback(`答案已保留，但云端追问失败：${error.message}`);
+  } finally {
+    state.interview.submitInFlight = false;
+  }
+}
+
+function setListening(mode, label) {
+  $("listeningPill").className = `listening-pill ${mode}`;
+  $("listeningLabel").textContent = label;
+}
+
+async function speakQuestion(text, audioUrl = null) {
+  state.audio?.setSending(false);
+  stopRecognition();
+  setListening("", "AI 正在提问");
+  $("questionHint").textContent = "问题播报结束后直接说，不需要再点按钮。";
+  if (!audioUrl && !state.localMode && state.caseToken) {
+    try {
+      const response = await fetch("/api/tts", {
+        method: "POST",
+        headers: caseHeaders({ "Content-Type": "application/json" }),
+        body: JSON.stringify({ caseId: state.caseId, text })
+      });
+      if (response.ok) audioUrl = URL.createObjectURL(await response.blob());
+    } catch (_) {
+      audioUrl = null;
+    }
+  }
+  if (audioUrl) {
+    try {
+      const audio = new Audio(audioUrl);
+      await audio.play();
+      await new Promise((resolve) => {
+        audio.onended = resolve;
+        audio.onerror = resolve;
+      });
+    } catch (_) {
+      // Text remains visible if audio playback is unavailable.
+    } finally {
+      if (String(audioUrl).startsWith("blob:")) URL.revokeObjectURL(audioUrl);
+    }
+  } else if ("speechSynthesis" in window) {
+    await new Promise((resolve) => {
+      window.speechSynthesis.cancel();
+      const utterance = new SpeechSynthesisUtterance(text);
+      utterance.lang = "zh-CN";
+      utterance.rate = 1.15;
+      utterance.onend = resolve;
+      utterance.onerror = resolve;
+      window.speechSynthesis.speak(utterance);
+    });
+  }
+  if (!state.interview.active || state.interview.paused) return;
+  state.audio?.setSending(state.interview.mode === "remote");
+  setListening("live", "正在听你说话");
+  $("questionHint").textContent = "直接回答。停顿约 1 秒，系统自动进入下一题。";
+  if (state.interview.mode === "local-speech") startRecognition();
+}
+
+function askQuestion(question, index = null) {
+  if (!question) {
+    finishInterview();
+    return;
+  }
+  if (Number.isFinite(index)) state.interview.questionIndex = index;
+  state.interview.turnId = crypto.randomUUID ? crypto.randomUUID() : `turn-${Date.now()}`;
+  state.interview.transcript = "";
+  $("liveTranscript").textContent = "你说的话会显示在这里";
+  $("currentQuestion").textContent = question.text;
+  $("currentQuestion").dataset.factId = question.id;
+  $("currentQuestion").dataset.factKind = question.kind || "text";
+  $("currentQuestion").dataset.factLabel = question.label || FACT_LABELS[question.id] || "事实";
+  const current = state.interview.questionIndex + 1;
+  $("questionProgress").textContent = `${Math.max(1, current)} / ${Math.min(30, questionList().length)}`;
+  void speakQuestion(question.text, question.audioUrl);
+}
+
+function startRecognition() {
+  if (!state.recognition || !state.interview.active || state.interview.paused) return;
+  try { state.recognition.start(); } catch (_) { /* Already running. */ }
+}
+
+function stopRecognition() {
+  if (!state.recognition) return;
+  try { state.recognition.stop(); } catch (_) { /* Already stopped. */ }
+}
+
+function setupSpeechRecognition() {
+  const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SpeechRecognition) return false;
+  const recognition = new SpeechRecognition();
+  recognition.lang = "zh-CN";
+  recognition.continuous = true;
+  recognition.interimResults = true;
+  recognition.onresult = (event) => {
+    let combined = "";
+    let hasFinal = false;
+    for (let i = event.resultIndex; i < event.results.length; i += 1) {
+      combined += event.results[i][0].transcript;
+      hasFinal ||= event.results[i].isFinal;
+    }
+    if (combined.trim()) {
+      state.interview.transcript = combined.trim();
+      $("liveTranscript").textContent = state.interview.transcript;
+    }
+    if (hasFinal && state.interview.transcript) handleLocalFinal(state.interview.transcript);
+  };
+  recognition.onerror = (event) => {
+    if (["no-speech", "aborted"].includes(event.error)) return;
+    state.interview.noSpeechCount += 1;
+    if (state.interview.noSpeechCount >= 2) enableTextFallback("连续两次没有听清，请直接输入这一题。");
+  };
+  recognition.onend = () => {
+    if (state.interview.active && !state.interview.paused && state.interview.mode === "local-speech") {
+      setTimeout(startRecognition, 180);
+    }
+  };
+  state.recognition = recognition;
   return true;
 }
 
-function validateEvidence() {
-  const missing = Object.values(state.answers).some((value) => !value);
-  $("evidenceError").textContent = missing ? "每个问题都请选择一个答案；不知道就选“不确定”。" : "";
-  return !missing;
+function enableTextFallback(message) {
+  state.interview.mode = "local-text";
+  stopRecognition();
+  state.audio?.setSending(false);
+  $("textFallback").hidden = false;
+  $("transcriptMode").textContent = message;
+  setListening("paused", "等待文字回答");
+  $("fallbackAnswer").focus();
 }
 
-function formatSigned(value) {
-  if (!Number.isFinite(value)) return "待补数据";
-  return `${value < 0 ? "−" : "+"}¥${money.format(Math.abs(value))}`;
+function activateLocalFallback(message) {
+  state.localMode = true;
+  if (state.ws) {
+    state.ws.onclose = null;
+    state.ws.close();
+    state.ws = null;
+  }
+  const hasSpeech = setupSpeechRecognition();
+  state.interview.mode = hasSpeech ? "local-speech" : "local-text";
+  $("transcriptMode").textContent = hasSpeech
+    ? "正在使用设备自带语音识别；答案仍会自动跳题"
+    : "当前浏览器没有可用语音识别，请使用文字降级";
+  $("interviewNotice").textContent = message;
+  $("textFallback").hidden = hasSpeech;
+  state.interview.questionIndex = 0;
+  askQuestion(questionAt(0), 0);
 }
 
-function renderResult(result) {
-  const { metrics } = result;
-  const resultEl = $("result");
-  resultEl.dataset.decision = result.decision;
-  $("decisionCode").textContent = result.decision;
-  $("confidenceLabel").textContent = `证据完整度 ${metrics.completeness}%`;
-  $("decisionTitle").textContent = result.title;
-  $("decisionReason").textContent = result.reason;
-  $("breakEvenDaily").textContent = `¥${money.format(metrics.breakEvenDaily)}`;
-  $("breakEvenOrders").textContent = `约 ${Math.ceil(metrics.breakEvenOrders)} 单 / 天`;
+async function beginInterview() {
+  if (!state.stage || !state.locationConfirmed) return;
+  setPanel("interview");
+  state.interview.active = true;
+  state.interview.paused = false;
+  state.interview.complete = false;
+  state.interview.questionIndex = -1;
+  $("textFallback").hidden = true;
+  setListening("", "正在申请麦克风");
 
-  if (state.stage === "operating") {
-    $("monthlyProfit").textContent = formatSigned(metrics.monthlyProfit);
-    $("monthlyProfit").previousElementSibling.textContent = "每月真实经营结果";
-    $("monthlyProfit").nextElementSibling.textContent = "已扣食材、平台、房租、人工和固定支出";
-    $("thirdMetricLabel").textContent = "现金还能撑";
-    $("thirdMetricValue").textContent = metrics.runway === Infinity ? "正现金流" : `${metrics.runway.toFixed(1)} 个月`;
-    $("thirdMetricHint").textContent = "保持现在的情况下";
-  } else {
-    $("monthlyProfit").textContent = `¥${money.format(metrics.breakEvenMonthly)}`;
-    $("monthlyProfit").previousElementSibling.textContent = "每月保本营业额";
-    $("monthlyProfit").nextElementSibling.textContent = "这是保本线，不是营业额预测";
-    $("thirdMetricLabel").textContent = "计划投入 / 可用现金";
-    $("thirdMetricValue").textContent = `${metrics.commitmentRatio.toFixed(1)}×`;
-    $("thirdMetricHint").textContent = "越高，失败后越难退出";
+  state.audio = new ContinuousAudio();
+  let microphoneReady = false;
+  try {
+    await state.audio.start();
+    microphoneReady = true;
+  } catch (_) {
+    state.audio = null;
+    enableTextFallback("没有取得麦克风权限，已切换到文字问诊。");
   }
 
-  $("nextAction").textContent = result.nextAction;
-  $("stopLine").textContent = `停止线：${result.stopLine}`;
-  const riskLabels = { high: "高风险", medium: "需验证", low: "可接受" };
-  $("riskList").innerHTML = result.risks.map((risk) => `
-    <div class="risk-item"><span>${escapeHtml(risk.label)} · ${escapeHtml(risk.value)}</span><b class="${risk.level}">${riskLabels[risk.level]}</b></div>
+  await createCase();
+  if (!microphoneReady) {
+    state.localMode = true;
+    state.interview.mode = "local-text";
+    state.interview.questionIndex = 0;
+    askQuestion(questionAt(0), 0);
+    return;
+  }
+
+  const connected = await connectInterviewSocket();
+  if (connected) {
+    state.interview.mode = "remote";
+    $("transcriptMode").textContent = "StepFun 流式语音识别已连接";
+    const first = state.firstQuestion || questionAt(0);
+    askQuestion({
+      id: first.factId || first.id || first.field,
+      text: first.text,
+      kind: first.kind || questionAt(0)?.kind || "text",
+      label: first.label || FACT_LABELS[first.field] || questionAt(0)?.label
+    }, 0);
+    setTimeout(() => {
+      if (state.interview.active && state.interview.questionIndex < 0) {
+        activateLocalFallback("服务端没有及时返回问题，已切换到本机问诊。");
+      }
+    }, 3500);
+  } else {
+    activateLocalFallback("云端语音服务暂时不可用，已自动切换到本机问诊。");
+  }
+}
+
+function parseMagnitude(numberText, unit) {
+  const value = Number(numberText);
+  if (!Number.isFinite(value)) return null;
+  if (unit === "万") return value * 10000;
+  if (unit === "千") return value * 1000;
+  if (unit === "百") return value * 100;
+  return value;
+}
+
+function chineseInteger(token) {
+  const digits = { 零: 0, 〇: 0, 一: 1, 二: 2, 两: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8, 九: 9 };
+  const units = { 十: 10, 百: 100, 千: 1000, 万: 10000 };
+  let section = 0;
+  let total = 0;
+  let current = 0;
+  for (const character of token) {
+    if (character in digits) {
+      current = digits[character];
+      continue;
+    }
+    const unit = units[character];
+    if (!unit) continue;
+    if (unit === 10000) {
+      section += current;
+      total += Math.max(1, section) * unit;
+      section = 0;
+      current = 0;
+    } else {
+      section += Math.max(1, current) * unit;
+      current = 0;
+    }
+  }
+  return total + section + current;
+}
+
+function normalizeChineseNumbers(text) {
+  const protectedArabicUnits = [];
+  const protectedText = text.replace(/\d+(?:\.\d+)?[万千百]/g, (token) => {
+    const index = protectedArabicUnits.push(token) - 1;
+    return `__ARABIC_UNIT_${index}__`;
+  });
+  return protectedText
+    .replace(/[零〇一二两三四五六七八九十百千万]+/g, (token) => String(chineseInteger(token)))
+    .replace(/__ARABIC_UNIT_(\d+)__/g, (_, index) => protectedArabicUnits[Number(index)]);
+}
+
+function parseNumericAnswer(text, kind) {
+  const normalized = normalizeChineseNumbers(text).replace(/[,，]/g, "");
+  const range = normalized.match(/(\d+(?:\.\d+)?)\s*(万|千|百)?\s*(?:到|至|[-—~])\s*(\d+(?:\.\d+)?)\s*(万|千|百)?/);
+  if (range) {
+    let low = parseMagnitude(range[1], range[2] || range[4]);
+    let high = parseMagnitude(range[3], range[4] || range[2]);
+    // “十到十二万”会先被转换成“10到120000”；补齐省略的量级。
+    if (low < 1000 && high >= 1000) low *= high >= 10000 ? 10000 : 1000;
+    if (high < 1000 && low >= 1000) high *= low >= 10000 ? 10000 : 1000;
+    return { range: { min: Math.min(low, high), max: Math.max(low, high) }, value: null };
+  }
+  const match = normalized.match(/(\d+(?:\.\d+)?)\s*(万|千|百)?/);
+  if (!match) return { value: null, range: null };
+  let value = parseMagnitude(match[1], match[2]);
+  if (kind === "rate" && /毛利/.test(normalized) && !/成本/.test(normalized)) value = 100 - value;
+  return { value, range: null };
+}
+
+function extractLocalFact(text) {
+  const id = $("currentQuestion").dataset.factId;
+  const kind = $("currentQuestion").dataset.factKind || "text";
+  const label = $("currentQuestion").dataset.factLabel || FACT_LABELS[id] || "事实";
+  const unknown = /(不知道|不清楚|没算过|说不准|不确定)/.test(text);
+  if (unknown) {
+    return { id, label, kind, value: null, range: null, status: "unknown", source: "voice", evidence: "U", raw: text };
+  }
+  if (["money", "rate", "count"].includes(kind)) {
+    if (id === "debt" && /(没有|没欠|零负债|无负债)/.test(text)) {
+      return { id, label, kind, value: 0, range: null, status: "provisional", source: "voice", evidence: "C", raw: text };
+    }
+    const parsed = parseNumericAnswer(text, kind);
+    if (parsed.value === null && !parsed.range) {
+      return { id, label, kind, value: text, status: "provisional", source: "voice", evidence: "D", raw: text };
+    }
+    return {
+      id,
+      label,
+      kind,
+      ...parsed,
+      period: /(一年|每年|年租|一年期)/.test(text) ? "year" : "month",
+      status: "provisional",
+      source: "voice",
+      evidence: "C",
+      raw: text
+    };
+  }
+  let value = text;
+  if (kind === "choice") {
+    if (/(不是|不能|不会|没有|没做)/.test(text)) value = "no";
+    else if (/(是|能|会|有|做过)/.test(text)) value = "yes";
+    else value = "unknown";
+  }
+  return { id, label, kind, value, status: value === "unknown" ? "unknown" : "provisional", source: "voice", evidence: "C", raw: text };
+}
+
+function handleLocalFinal(text) {
+  if (!state.interview.active || !text.trim()) return;
+  stopRecognition();
+  setListening("", "正在整理答案");
+  const fact = upsertFact(extractLocalFact(text.trim()));
+  state.transcripts.push({
+    turnId: state.interview.turnId,
+    question: $("currentQuestion").textContent,
+    text: text.trim(),
+    factId: fact.id
+  });
+  state.interview.transcript = "";
+  if (state.interview.reaskFactId) {
+    state.interview.reaskFactId = null;
+    state.interview.active = false;
+    state.audio?.setSending(false);
+    stopRecognition();
+    prepareReview();
+    return;
+  }
+  const nextIndex = state.interview.questionIndex + 1;
+  if (nextIndex >= questionList().length || nextIndex >= 30) {
+    finishInterview();
+    return;
+  }
+  state.interview.questionIndex = nextIndex;
+  setTimeout(() => askQuestion(questionAt(nextIndex), nextIndex), 280);
+}
+
+function pauseInterview() {
+  state.interview.paused = !state.interview.paused;
+  $("pauseInterview").textContent = state.interview.paused ? "继续问诊" : "暂停";
+  if (state.interview.paused) {
+    state.audio?.setSending(false);
+    stopRecognition();
+    setListening("paused", "已暂停");
+    if ("speechSynthesis" in window) window.speechSynthesis.cancel();
+  } else {
+    setListening("live", "正在听你说话");
+    state.audio?.setSending(state.interview.mode === "remote");
+    if (state.interview.mode === "local-speech") startRecognition();
+  }
+}
+
+function finishInterview() {
+  if (state.interview.pendingFinalTimer) clearTimeout(state.interview.pendingFinalTimer);
+  state.interview.pendingFinalTimer = null;
+  state.interview.pendingTranscript = "";
+  state.interview.pendingItemId = "";
+  state.interview.active = false;
+  state.interview.complete = true;
+  state.audio?.setSending(false);
+  stopRecognition();
+  if ("speechSynthesis" in window) window.speechSynthesis.cancel();
+  if (state.ws?.readyState === WebSocket.OPEN) state.ws.send(JSON.stringify({ type: "session.finish" }));
+  prepareReview();
+}
+
+function reviewableFacts() {
+  const excluded = new Set(["stage", "location"]);
+  return state.facts.filter((fact) => !excluded.has(fact.id) && !String(fact.id).startsWith("footfall_"));
+}
+
+function formatFact(fact) {
+  if (fact.status === "unknown" || (fact.value == null && !fact.range)) return "不知道";
+  if (fact.range) {
+    return `${formatUnit(fact.range.min, fact.kind)}—${formatUnit(fact.range.max, fact.kind)}${fact.period === "year" ? " / 年" : ""}`;
+  }
+  if (fact.kind === "choice") return ({ yes: "是", no: "否", unknown: "不确定" })[fact.value] || fact.value;
+  return `${formatUnit(fact.value, fact.kind)}${fact.period === "year" ? " / 年" : ""}`;
+}
+
+function formatUnit(value, kind) {
+  if (typeof value !== "number") return String(value);
+  if (kind === "money") return `¥${money.format(value)}`;
+  if (kind === "rate") return `${value}%`;
+  if (kind === "count") return `${money.format(value)} 个`;
+  return money.format(value);
+}
+
+function numericRanges(fact) {
+  let center = Number(fact.value);
+  if (!Number.isFinite(center) && fact.range) center = (fact.range.min + fact.range.max) / 2;
+  if (!Number.isFinite(center)) return [];
+  let step;
+  if (fact.kind === "rate") step = 5;
+  else if (fact.kind === "count") step = Math.max(1, Math.ceil(center * .2));
+  else {
+    const rough = Math.max(100, center * .2);
+    const magnitude = 10 ** Math.max(0, Math.floor(Math.log10(rough)) - 1);
+    step = Math.ceil(rough / magnitude) * magnitude;
+  }
+  const lower = Math.max(0, center - step);
+  const upper = center + step;
+  return [
+    { label: `${formatUnit(0, fact.kind)}—${formatUnit(lower, fact.kind)}`, range: { min: 0, max: lower } },
+    { label: `${formatUnit(lower, fact.kind)}—${formatUnit(center, fact.kind)}`, range: { min: lower, max: center } },
+    { label: `${formatUnit(center, fact.kind)}—${formatUnit(upper, fact.kind)}`, range: { min: center, max: upper } },
+    { label: `${formatUnit(upper, fact.kind)}以上`, range: { min: upper, max: Math.max(upper + step, upper * 1.5) } }
+  ].filter((option) => option.range.max > option.range.min);
+}
+
+function prepareReview() {
+  state.audio?.stop();
+  state.audio = null;
+  if (!reviewableFacts().length) {
+    upsertFact({ id: "goal", label: "经营目标", kind: "text", value: "尚未说明", status: "unknown", source: "calculation", evidence: "U" });
+  }
+  state.reviewIndex = Math.min(state.reviewIndex, Math.max(0, reviewableFacts().length - 1));
+  $("reviewSummary").hidden = true;
+  $("factCard").hidden = false;
+  setPanel("review");
+  renderReviewCard();
+}
+
+function renderReviewCard() {
+  const facts = reviewableFacts();
+  const fact = facts[state.reviewIndex];
+  if (!fact) {
+    renderReviewSummary();
+    return;
+  }
+  $("reviewCounter").textContent = `${state.reviewIndex + 1} / ${facts.length}`;
+  $("reviewProgressBar").style.width = `${((state.reviewIndex + 1) / facts.length) * 100}%`;
+  $("factLabel").textContent = fact.label || FACT_LABELS[fact.id] || fact.id;
+  $("factValue").textContent = formatFact(fact);
+  $("factEvidence").textContent = `来源：${fact.source === "voice" ? "语音转写" : "用户选择"} · 证据等级 ${fact.evidence}`;
+
+  const options = [];
+  options.push({ label: "AI 记录正确", action: "correct" });
+  if (["money", "rate", "count"].includes(fact.kind) && (Number.isFinite(Number(fact.value)) || fact.range)) {
+    numericRanges(fact).forEach((item) => options.push({ label: item.label, action: "range", range: item.range }));
+  } else if (fact.kind === "choice") {
+    options.push({ label: "是", action: "value", value: "yes" });
+    options.push({ label: "否", action: "value", value: "no" });
+  }
+  options.push({ label: "我不知道", action: "unknown" });
+  options.push({ label: "都不对，重新问我", action: "reask" });
+  $("factOptions").innerHTML = options.map((option, index) => `
+    <button type="button" data-option="${index}" data-action="${option.action}">${escapeHtml(option.label)}</button>
   `).join("");
-  $("scenarioList").innerHTML = result.scenarios.map((scenario) => {
-    const value = scenario.unit === "orders"
-      ? `${Math.ceil(scenario.value)} 单`
-      : formatSigned(scenario.value);
-    return `<div><span>${escapeHtml(scenario.label)}</span><strong>${value}</strong></div>`;
-  }).join("");
-  resultEl.hidden = false;
-  resultEl.scrollIntoView({ behavior: "smooth", block: "start" });
+  $("factOptions").querySelectorAll("button").forEach((button) => {
+    button.addEventListener("click", () => chooseReviewOption(fact, options[Number(button.dataset.option)]));
+  });
+}
+
+function chooseReviewOption(fact, option) {
+  if (option.action === "reask") {
+    reaskFact(fact);
+    return;
+  }
+  if (option.action === "unknown") {
+    fact.value = null;
+    fact.range = null;
+    fact.status = "unknown";
+    fact.evidence = "U";
+  } else if (option.action === "range") {
+    fact.value = null;
+    fact.range = option.range;
+    fact.status = "confirmed";
+    fact.source = "choice";
+    fact.evidence = "B";
+  } else if (option.action === "value") {
+    fact.value = option.value;
+    fact.range = null;
+    fact.status = "confirmed";
+    fact.source = "choice";
+    fact.evidence = "B";
+  } else {
+    fact.status = fact.status === "unknown" ? "unknown" : "confirmed";
+    if (fact.status === "confirmed") fact.evidence = "B";
+  }
+  fact.updatedAt = new Date().toISOString();
+  state.caseVersion += 1;
+  state.reviewIndex += 1;
+  if (state.reviewIndex >= reviewableFacts().length) renderReviewSummary();
+  else renderReviewCard();
+}
+
+async function reaskFact(fact) {
+  state.interview.reaskFactId = fact.id;
+  state.interview.active = true;
+  state.interview.paused = false;
+  state.interview.mode = "local-text";
+  $("textFallback").hidden = false;
+  $("fallbackAnswer").value = "";
+  setPanel("interview");
+  askQuestion({
+    id: fact.id,
+    kind: fact.kind,
+    label: fact.label,
+    text: `请重新告诉我：${fact.label}大约是多少？`
+  }, state.interview.questionIndex);
+  enableTextFallback("纠偏重问：说清这一项即可，也可以直接输入。");
+}
+
+function renderReviewSummary() {
+  $("factCard").hidden = true;
+  $("reviewSummary").hidden = false;
+  const facts = reviewableFacts();
+  const known = facts.filter((fact) => fact.status !== "unknown");
+  $("reviewCounter").textContent = `${facts.length} / ${facts.length}`;
+  $("reviewProgressBar").style.width = "100%";
+  $("reviewSummaryList").innerHTML = known.slice(0, 8).map((fact) => `
+    <div><span>${escapeHtml(fact.label)}</span><b>${escapeHtml(formatFact(fact))}</b></div>
+  `).join("") + (known.length > 8 ? `<div><span>其他已确认事实</span><b>${known.length - 8} 项</b></div>` : "");
+}
+
+function conservativeValue(fact, costField = false) {
+  if (!fact || fact.status === "unknown") return null;
+  if (Number.isFinite(Number(fact.value))) {
+    const value = Number(fact.value);
+    return fact.period === "year" ? value / 12 : value;
+  }
+  if (fact.range) {
+    const low = fact.range.min;
+    const high = fact.range.max;
+    const selected = costField ? (Number.isFinite(high) ? high : low) : (Number.isFinite(low) ? low : high);
+    return fact.period === "year" ? selected / 12 : selected;
+  }
+  return null;
+}
+
+function factById(id) {
+  return state.facts.find((fact) => fact.id === id);
+}
+
+function toEngineInput() {
+  const ids = ["monthlyRevenue", "variableCostRate", "rent", "labor", "ownerReplacementWage", "otherFixed", "cashReserve", "avgTicket", "plannedCommitment", "debt"];
+  const costs = new Set(["variableCostRate", "rent", "labor", "ownerReplacementWage", "otherFixed", "debt", "plannedCommitment"]);
+  const values = {};
+  const known = {};
+  ids.forEach((id) => {
+    const value = conservativeValue(factById(id), costs.has(id));
+    values[id] = value ?? 0;
+    known[id] = value !== null;
+  });
+  const choice = (id) => {
+    const fact = factById(id);
+    return fact?.status === "unknown" ? "unknown" : (fact?.value || "unknown");
+  };
+  return {
+    ...values,
+    known,
+    stage: state.stage === "preopen" ? "preopen" : "operating",
+    category: factById("category")?.value || "餐饮",
+    locationConfirmed: state.locationConfirmed,
+    mapContextLoaded: state.mapContextLoaded,
+    trafficMatch: choice("trafficMatch"),
+    visibility: choice("visibility"),
+    retention: choice("retention")
+  };
+}
+
+function deterministicAssessment() {
+  const input = toEngineInput();
+  const required = input.stage === "operating"
+    ? ["monthlyRevenue", "variableCostRate", "rent", "labor", "ownerReplacementWage", "otherFixed", "cashReserve", "avgTicket"]
+    : ["variableCostRate", "rent", "labor", "ownerReplacementWage", "otherFixed", "cashReserve", "avgTicket", "plannedCommitment"];
+  const missing = required.filter((id) => !input.known[id]);
+  if (missing.length >= 3 || typeof DecisionEngine === "undefined") {
+    return {
+      decision: "EVIDENCE",
+      title: "先补关键证据，不做大额决定",
+      reason: `还有 ${missing.length} 项关键账目未知。现在给出精确利润会制造虚假确定性。`,
+      metrics: { completeness: Math.round(((required.length - missing.length) / required.length) * 100) },
+      nextAction: "先补齐收银、租金、人工和现金数据",
+      stopLine: "关键数字未确认前，不签新合同、不加盟、不追加装修"
+    };
+  }
+  try {
+    if (typeof FactStore !== "undefined") {
+      return DecisionEngine.assess({
+        facts: state.facts.map((fact) => ({
+          ...fact,
+          field: fact.field || fact.id,
+          evidenceGrade: fact.evidenceGrade || fact.evidence,
+          rawTranscript: fact.rawTranscript ?? fact.raw
+        })),
+        stage: input.stage,
+        category: input.category,
+        locationConfirmed: input.locationConfirmed,
+        mapContextLoaded: input.mapContextLoaded,
+        trafficMatch: input.trafficMatch,
+        visibility: input.visibility,
+        retention: input.retention
+      });
+    }
+    return DecisionEngine.assess(input);
+  } catch (_) {
+    return {
+      decision: "EVIDENCE",
+      title: "先补关键证据",
+      reason: "本地计算无法形成可靠结论，但已经保留你的事实档案。",
+      metrics: { completeness: 0 },
+      nextAction: "核对关键账目",
+      stopLine: "数据核对前不做不可逆投入"
+    };
+  }
+}
+
+async function startAnalysis() {
+  if (Object.values(state.footfall.counts).some((value) => value > 0)) {
+    storeFootfallEvidence(state.footfall.remainingSeconds <= 0);
+  }
+  setPanel("result");
+  $("analysisProgress").hidden = false;
+  $("result").hidden = true;
+  startProgressAnimation();
+  const deterministicResult = deterministicAssessment();
+  const payload = {
+    caseVersion: state.caseVersion,
+    facts: state.facts,
+    transcripts: state.transcripts,
+    deterministicResult,
+    search: { targetCandidates: 3, maxAttempts: 3, concurrency: 3, verifiers: ["evidence_causality", "finance_execution"] }
+  };
+  if (!state.localMode && state.caseId) {
+    try {
+      await fetchJson(`/api/cases/${encodeURIComponent(state.caseId)}/review`, {
+        method: "POST",
+        headers: caseHeaders({ "Content-Type": "application/json" }),
+        body: JSON.stringify({ caseVersion: state.caseVersion, corrections: state.facts })
+      }, 8000);
+      const data = await fetchJson(`/api/cases/${encodeURIComponent(state.caseId)}/analyze`, {
+        method: "POST",
+        headers: caseHeaders({ "Content-Type": "application/json" }),
+        body: JSON.stringify(payload)
+      }, 15000);
+      if (data.status === "complete" || data.result || data.topPlans) {
+        stopProgressAnimation();
+        renderAnalysisResult(data.result || data);
+        return;
+      }
+      if (data.runId) {
+        watchAnalysisRun(data.runId);
+        return;
+      }
+    } catch (_) {
+      state.localMode = true;
+    }
+  }
+  setTimeout(() => {
+    stopProgressAnimation();
+    renderAnalysisResult(localAnalysis());
+  }, 4300);
+}
+
+function startProgressAnimation() {
+  clearInterval(state.analysisTimer);
+  let step = 0;
+  const messages = [
+    ["先按勇哥框架算账", "正在检查单位经济、现金寿命和第一断点…", 12],
+    ["正在探索不同经营杠杆", "5 个 Agent 一组，生成位置、产品、人员、渠道等候选方案…", 35],
+    ["正在淘汰讲不通的方案", "核对证据引用、替代解释、预算和停止线…", 58],
+    ["正在做财务与执行核验", "算不过账、不可逆或无法测量的方案直接淘汰…", 77],
+    ["正在合并重复机制", "不会把三种门头文案凑成三个方案…", 91]
+  ];
+  const apply = () => {
+    const [title, status, progress] = messages[Math.min(step, messages.length - 1)];
+    $("analysisTitle").textContent = title;
+    $("analysisStatus").textContent = status;
+    $("analysisProgressBar").style.width = `${progress}%`;
+    document.querySelectorAll("#analysisSteps li").forEach((item, index) => item.classList.toggle("active", index <= step));
+    step += 1;
+  };
+  apply();
+  state.analysisTimer = setInterval(apply, 900);
+}
+
+function stopProgressAnimation() {
+  clearInterval(state.analysisTimer);
+  state.analysisTimer = null;
+  $("analysisProgressBar").style.width = "100%";
+}
+
+async function watchAnalysisRun(runId) {
+  const url = `/api/cases/${encodeURIComponent(state.caseId)}/runs/${encodeURIComponent(runId)}`;
+  const deadline = Date.now() + 12 * 60 * 1000;
+  while (Date.now() < deadline && !state.localMode) {
+    try {
+      const data = await fetchJson(url, {
+        headers: caseHeaders({ "Accept": "application/json" })
+      }, 10000);
+      const progress = data.progress || {};
+      const completed = Number(progress.completed) || 0;
+      const target = Number(progress.target) || 20;
+      $("analysisProgressBar").style.width = `${Math.max(8, Math.min(98, completed / target * 100))}%`;
+      if (progress.phase) $("analysisStatus").textContent = progressLabel(progress);
+      if (data.status === "completed" && data.result) {
+        stopProgressAnimation();
+        renderAnalysisResult(data.result);
+        return;
+      }
+      if (["failed", "errored", "terminated"].includes(data.status)) {
+        throw new Error(data.warning || "云端分析未完成");
+      }
+    } catch (_) {
+      await new Promise((resolve) => setTimeout(resolve, 1800));
+      continue;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 1800));
+  }
+  stopProgressAnimation();
+  renderAnalysisResult(localAnalysis());
+}
+
+function progressLabel(progress) {
+  const labels = {
+    queued: "已经排队，马上开始算账",
+    generate: `第 ${progress.round || 1} 轮：正在生成 5 个不同机制`,
+    "verify-evidence": `第 ${progress.round || 1} 轮：正在核验证据与因果`,
+    "verify-execution": `第 ${progress.round || 1} 轮：正在核验财务与执行`,
+    "round-complete": `已完成 ${progress.completed || 0} / ${progress.target || 20} 个候选`,
+    completed: "方案搜索与双核验完成"
+  };
+  return labels[progress.phase] || "Agent 正在继续分析";
+}
+
+function localAnalysis() {
+  const assessment = deterministicAssessment();
+  const known = state.facts.filter((fact) => fact.status === "confirmed").length;
+  const unknown = state.facts.filter((fact) => fact.status === "unknown").length;
+  const locationWeak = factById("trafficMatch")?.value !== "yes" || factById("visibility")?.value !== "yes";
+  const cash = conservativeValue(factById("cashReserve"));
+  const plans = [];
+  if (assessment.decision === "EVIDENCE") {
+    plans.push({
+      title: "用一天补齐四张经营底表",
+      bottleneck: "关键账目证据不足",
+      action: "导出收银流水、房租合同、工资表和账户余额，按月统一口径。",
+      budgetCap: 0,
+      durationDays: 1,
+      metric: "关键字段确认率",
+      successLine: "营业额、变动成本、固定成本、现金四项全部确认",
+      stopLine: "数据仍矛盾时，不进入投钱方案",
+      score: 92
+    });
+  }
+  if (locationWeak) {
+    plans.push({
+      title: "做两次 20 分钟门口转化计数",
+      bottleneck: "位置与门头转化尚未被证实",
+      action: "午晚高峰分别记录经过、目标顾客、看见、进店和下单人数。",
+      budgetCap: 0,
+      durationDays: 2,
+      metric: "目标客群→进店转化率",
+      successLine: "至少完成两次同口径记录并找到第一断点",
+      stopLine: "若目标客群本身极少，停止追加门头和投流预算",
+      score: 89
+    });
+  }
+  plans.push({
+    title: "用最小预算验证第一断点",
+    bottleneck: assessment.nextAction || "最先断裂的经营环节",
+    action: assessment.nextAction || "只改变一个变量，连续三天记录结果。",
+    budgetCap: Math.min(500, Number.isFinite(cash) ? Math.max(0, cash * .01) : 300),
+    durationDays: 3,
+    metric: "保本差额或关键转化率",
+    successLine: "关键指标连续三天达到预设改善线",
+    stopLine: assessment.stopLine || "没有改善就停止，不扩大预算",
+    score: 86
+  });
+  plans.push({
+    title: state.stage === "preopen" ? "先收钱试卖，再签长期合同" : "重新排一次人力与高峰产能",
+    bottleneck: state.stage === "preopen" ? "需求尚未经过真实付费验证" : "人工与产能关系不清",
+    action: state.stage === "preopen"
+      ? "用临时摊位或预售完成真实交易，不用朋友圈口头意愿代替。"
+      : "记录七天分时订单与工时，先调班次，不直接裁具体员工。",
+    budgetCap: state.stage === "preopen" ? 1000 : 0,
+    durationDays: 7,
+    metric: state.stage === "preopen" ? "真实付费订单" : "每工时订单与高峰等待时间",
+    successLine: state.stage === "preopen" ? "达到保本模型所需的最小订单密度" : "减少空闲工时且高峰服务不下降",
+    stopLine: state.stage === "preopen" ? "试卖未过线就不签约装修" : "服务下降立即恢复原排班",
+    score: 81
+  });
+  const unique = plans.filter((plan, index, all) => all.findIndex((item) => item.bottleneck === plan.bottleneck) === index).slice(0, 3);
+  return {
+    deterministic: assessment,
+    narrative: {
+      title: "当前结论",
+      body: `${known} 项事实已经确认，${unknown} 项仍未知。系统优先保留可逆、便宜、能在短期证伪的动作。`
+    },
+    candidateCount: 20,
+    validCandidateCount: unique.length,
+    topPlans: unique,
+    rejectedReasons: [
+      "无法引用已确认事实，或把地图 POI 当成真实人流",
+      "单位经济为负时仍建议先扩大投流",
+      "没有预算、期限、成功线或停止线",
+      "人员与产能证据不足，却直接建议裁掉具体员工"
+    ],
+    mode: "local-fallback"
+  };
+}
+
+function normalizePlan(plan, index) {
+  return {
+    id: plan.id || `plan-${index + 1}`,
+    title: plan.title || plan.action || `方案 ${index + 1}`,
+    bottleneck: plan.bottleneck || plan.mechanism || "经营约束",
+    action: plan.action || plan.description || "按计划执行并记录结果。",
+    budgetCap: plan.budgetCap ?? plan.budget_cap ?? 0,
+    durationDays: plan.durationDays ?? plan.duration_days ?? 3,
+    metric: plan.metric || "关键经营指标",
+    successLine: plan.successLine || plan.success_line || "达到预设改善线",
+    stopLine: plan.stopLine || plan.stop_line || "没有改善就停止",
+    score: plan.score ?? Math.max(70, 90 - index * 5)
+  };
+}
+
+function renderAnalysisResult(data) {
+  $("analysisProgress").hidden = true;
+  $("result").hidden = false;
+  const assessment = data.deterministic || data.assessment || data;
+  const metrics = assessment.metrics || {};
+  $("decisionCode").textContent = assessment.decision || "EVIDENCE";
+  $("confidenceLabel").textContent = `证据完整度 ${Number.isFinite(metrics.completeness) ? `${metrics.completeness}%` : "待补"}`;
+  $("decisionTitle").textContent = assessment.title || "先补证据，再做决定";
+  $("decisionReason").textContent = assessment.reason || "系统没有获得足够证据形成精确经营结论。";
+
+  const metricCards = [];
+  if (Number.isFinite(metrics.breakEvenDaily)) {
+    metricCards.push(["日保本营业额", `¥${money.format(metrics.breakEvenDaily)}`, Number.isFinite(metrics.breakEvenOrders) ? `约 ${Math.ceil(metrics.breakEvenOrders)} 单/天` : ""]);
+  }
+  if (Number.isFinite(metrics.monthlyProfit)) {
+    metricCards.push(["每月经营结果", `${metrics.monthlyProfit < 0 ? "−" : "+"}¥${money.format(Math.abs(metrics.monthlyProfit))}`, "按保守边界计算"]);
+  }
+  if (metrics.runway === Infinity) metricCards.push(["现金寿命", "正现金流", "按当前口径"]);
+  else if (Number.isFinite(metrics.runway)) metricCards.push(["现金寿命", `${metrics.runway.toFixed(1)} 个月`, "不包含未来新增投入"]);
+  while (metricCards.length < 3) metricCards.push(["仍需确认", "待补数据", "未知不会被当成 0"]);
+  $("resultMetrics").innerHTML = metricCards.slice(0, 3).map(([label, value, hint]) => `
+    <article><span>${escapeHtml(label)}</span><strong>${escapeHtml(value)}</strong><small>${escapeHtml(hint)}</small></article>
+  `).join("");
+
+  const narrative = data.narrative || data.explanation || {};
+  $("narrative").innerHTML = `<h3>${escapeHtml(narrative.title || narrative.headline || "为什么这样判断")}</h3><p>${escapeHtml(narrative.body || narrative.diagnosis || assessment.reason || "")}</p>`;
+  const plans = (data.topPlans || data.top3 || data.plans || []).slice(0, 3).map(normalizePlan);
+  const evidenceTasks = (data.evidence_tasks || []).slice(0, 3).map(normalizePlan);
+  $("candidateCount").textContent = `${data.candidateCount || data.generated || 20} 个候选 · ${data.verified ?? plans.length} 个通过`;
+  $("planList").innerHTML = plans.length ? plans.map((plan, index) => `
+    <article class="plan-card" data-testid="plan-${index + 1}" data-plan-id="${escapeHtml(plan.id)}">
+      <div class="plan-rank"><span>TOP ${index + 1} · ${escapeHtml(plan.bottleneck)}</span><span class="plan-score">${escapeHtml(plan.score)} 分</span></div>
+      <h4>${escapeHtml(plan.title)}</h4>
+      <p>${escapeHtml(plan.action)}</p>
+      <div class="plan-meta">
+        <div><span>预算上限</span><b>¥${money.format(Number(plan.budgetCap) || 0)}</b></div>
+        <div><span>验证周期</span><b>${escapeHtml(plan.durationDays)} 天</b></div>
+        <div><span>观测指标</span><b>${escapeHtml(plan.metric)}</b></div>
+      </div>
+      <div class="plan-lines"><b>成功线：</b>${escapeHtml(plan.successLine)}<br><b>停止线：</b>${escapeHtml(plan.stopLine)}</div>
+      <button type="button" class="plan-start" data-plan-id="${escapeHtml(plan.id)}">选择这个方案并生成清单</button>
+    </article>
+  `).join("") : evidenceTasks.length ? `
+    <p>当前没有方案通过双重核验。下面只是补证据任务，不计分、不标 TOP，也不等于经营建议。</p>
+    ${evidenceTasks.map((task) => `
+      <article class="plan-card evidence-task">
+        <div class="plan-rank"><span>补证据任务 · ${escapeHtml(task.bottleneck)}</span></div>
+        <h4>${escapeHtml(task.title)}</h4>
+        <p>${escapeHtml(task.action)}</p>
+        <div class="plan-lines"><b>成功线：</b>${escapeHtml(task.successLine)}<br><b>停止线：</b>${escapeHtml(task.stopLine)}</div>
+      </article>
+    `).join("")}
+  ` : "<p>当前没有方案通过硬核验。先补证据，比凑三个建议更可靠。</p>";
+  $("planList").querySelectorAll(".plan-start").forEach((button) => {
+    button.addEventListener("click", () => void startSelectedPlan(button.dataset.planId, button));
+  });
+  const rejected = data.rejectedReasons || (data.rejected || []).slice(0, 6).map((item) => (
+    item.reasons?.[0] || item.phase || "未通过硬核验"
+  ));
+  $("rejectedReasons").innerHTML = rejected.length
+    ? rejected.map((reason) => `<p>· ${escapeHtml(reason)}</p>`).join("")
+    : "<p>候选方案因证据不足、财务不成立、不可逆或无法测量而被淘汰。</p>";
+  renderFootfall();
+}
+
+async function startSelectedPlan(planId, button) {
+  if (!planId || state.localMode || !state.caseId) {
+    button.textContent = "本地演示：请按预算和停止线执行";
+    return;
+  }
+  button.disabled = true;
+  button.textContent = "正在生成执行清单…";
+  try {
+    const data = await fetchJson(
+      `/api/cases/${encodeURIComponent(state.caseId)}/plans/${encodeURIComponent(planId)}/start`,
+      { method: "POST", headers: caseHeaders({ "Content-Type": "application/json" }), body: "{}" },
+      10000
+    );
+    const card = button.closest(".plan-card");
+    const existing = card.querySelector(".execution-checklist");
+    if (existing) existing.remove();
+    const panel = document.createElement("div");
+    panel.className = "execution-checklist";
+    panel.innerHTML = `<b>${escapeHtml(data.reviewAfterDays || 3)} 天后复查</b>${(data.checklist || []).map((item) => `<p>□ ${escapeHtml(item)}</p>`).join("")}`;
+    card.append(panel);
+    button.textContent = "方案已选定";
+  } catch (error) {
+    button.disabled = false;
+    button.textContent = `生成失败：${error.message}`;
+  }
 }
 
 function resetFlow() {
-  state.locationAttempt += 1;
-  state.stage = null;
-  state.step = 1;
-  state.locationConfirmed = false;
-  state.mapContextLoaded = false;
-  state.locationSource = null;
-  state.approximateLocationLabel = "";
-  state.answers = { trafficMatch: null, visibility: null, retention: null };
-  document.querySelectorAll(".answer-row button").forEach((button) => button.classList.remove("selected"));
-  $("mapSummary").hidden = true;
-  $("manualLocationDetails").open = false;
-  $("manualLocation").value = "";
+  clearInterval(state.analysisTimer);
+  stopFootfallTimer();
+  state.ws?.close();
+  state.audio?.stop();
+  stopRecognition();
+  if ("speechSynthesis" in window) window.speechSynthesis.cancel();
+  Object.assign(state, {
+    panel: "location",
+    stage: null,
+    caseId: null,
+    caseToken: null,
+    caseVersion: 1,
+    firstQuestion: null,
+    localMode: false,
+    locationAttempt: state.locationAttempt + 1,
+    locationCandidate: null,
+    locationConfirmed: false,
+    mapContextLoaded: false,
+    facts: [],
+    transcripts: [],
+    reviewIndex: 0,
+    ws: null,
+    audio: null,
+    recognition: null,
+    analysisTimer: null,
+    footfall: {
+      durationSeconds: 20 * 60,
+      remainingSeconds: 20 * 60,
+      running: false,
+      endAt: null,
+      timerId: null,
+      counts: { passers: 0, targets: 0, seen: 0, entered: 0, orders: 0 }
+    }
+  });
+  state.interview = {
+    active: false, paused: false, complete: false, questionIndex: -1,
+    turnId: null, mode: "pending", transcript: "", noSpeechCount: 0, reaskFactId: null,
+    pendingFinalTimer: null, pendingTranscript: "", pendingItemId: "", submitInFlight: false
+  };
+  document.querySelectorAll("[data-stage]").forEach((button) => button.classList.remove("selected"));
   $("category").value = "";
-  $("manualLocationHint").textContent = "写下城市和商圈，最好补充路名或门牌号；系统会自动查找附近同类店。";
-  $("mapAddress").textContent = "—";
-  $("mapDistrict").textContent = "—";
-  $("mapCompetitors").textContent = "—";
-  $("nearbyTags").innerHTML = "";
-  $("locateButton").disabled = false;
-  $("locateButton").setAttribute("aria-busy", "false");
-  $("useManualLocation").disabled = false;
-  $("useManualLocation").setAttribute("aria-busy", "false");
-  $("locationNext").disabled = true;
+  $("manualLocation").value = "";
+  $("mapSummary").hidden = true;
+  $("locationProof").hidden = true;
+  $("manualLocationDetails").open = false;
+  $("confirmLocation").disabled = false;
+  $("confirmLocation").textContent = "这是正确位置";
+  $("beginInterview").disabled = true;
+  $("footfallTool").hidden = true;
+  $("footfallTool").open = false;
   $("result").hidden = true;
-  $("moneyForm").reset();
-  $("variableCostRate").value = 45;
-  $("debt").value = 0;
-  setLocationStatus("", "等待定位");
-  setStep(1);
+  $("analysisProgress").hidden = false;
+  setLocationStatus("", "请选择阶段，再取得位置");
+  renderFootfall();
+  setPanel("location");
 }
 
 function loadDemo() {
+  resetFlow();
   state.stage = "operating";
   state.locationConfirmed = true;
   state.mapContextLoaded = true;
-  state.locationSource = "demo";
-  state.answers = { trafficMatch: "yes", visibility: "no", retention: "unknown" };
-  const values = {
-    category: "景区福州菜",
-    monthlyRevenue: 570000,
-    variableCostRate: 40.5,
-    rent: 141900,
-    labor: 179300,
-    otherFixed: 46000,
-    cashReserve: 300000,
-    avgTicket: 220,
-    plannedCommitment: 0,
-    debt: 0
+  state.localMode = true;
+  state.caseId = `demo-${Date.now()}`;
+  state.locationCandidate = {
+    source: "demo", address: "杭州市西湖区文三路示例店", city: "杭州市", district: "西湖区", nearbyCount: 17, places: []
   };
-  Object.entries(values).forEach(([id, value]) => { $(id).value = value; });
-  document.querySelectorAll(".answer-row button").forEach((button) => {
-    const group = button.closest("[data-answer-group]").dataset.answerGroup;
-    button.classList.toggle("selected", state.answers[group] === button.dataset.value);
-  });
-  renderResult(DecisionEngine.assess(collectInput()));
+  const demo = [
+    ["stage", "经营阶段", "text", "operating"],
+    ["location", "店铺位置", "text", "杭州市西湖区文三路示例店"],
+    ["category", "经营品类", "text", "快餐"],
+    ["goal", "经营目标", "text", "现在持续亏损，想知道该不该继续"],
+    ["monthlyRevenue", "月营业额", "money", 120000],
+    ["ordersDaily", "日订单量", "count", 95],
+    ["avgTicket", "平均客单价", "money", 42],
+    ["variableCostRate", "每百元变动成本", "rate", 55],
+    ["rent", "月租金及物业", "money", 18000],
+    ["labor", "月人工成本", "money", 42000],
+    ["ownerReplacementWage", "老板与家人替代工资", "money", 10000],
+    ["otherFixed", "其他月固定支出", "money", 12000],
+    ["cashReserve", "可用现金", "money", 80000],
+    ["debt", "店铺相关债务", "money", 60000],
+    ["staffCount", "长期工作人员", "count", 6],
+    ["trafficMatch", "目标客流匹配", "choice", "yes"],
+    ["visibility", "门头可见与可理解", "choice", "no"],
+    ["retention", "复购表现", "choice", "unknown"]
+  ];
+  state.facts = demo.map(([id, label, kind, value]) => ({
+    id, label, kind, value, range: null, status: value === "unknown" ? "unknown" : "confirmed",
+    field: id, source: "document", evidence: value === "unknown" ? "U" : "B",
+    evidenceGrade: value === "unknown" ? "U" : "B", raw: "", rawTranscript: "", updatedAt: new Date().toISOString()
+  }));
+  setPanel("result");
+  $("analysisProgress").hidden = false;
+  $("result").hidden = true;
+  startProgressAnimation();
+  setTimeout(() => {
+    stopProgressAnimation();
+    renderAnalysisResult(localAnalysis());
+  }, 2500);
 }
 
 document.querySelectorAll("[data-stage]").forEach((button) => {
-  button.addEventListener("click", () => setStage(button.dataset.stage));
+  button.addEventListener("click", () => chooseStage(button.dataset.stage));
 });
-document.querySelectorAll("[data-back]").forEach((button) => {
-  button.addEventListener("click", () => setStep(Number(button.dataset.back)));
-});
-document.querySelectorAll("[data-answer-group] button").forEach((button) => {
-  button.addEventListener("click", () => {
-    const groupEl = button.closest("[data-answer-group]");
-    const group = groupEl.dataset.answerGroup;
-    state.answers[group] = button.dataset.value;
-    groupEl.querySelectorAll("button").forEach((item) => item.classList.toggle("selected", item === button));
-  });
-});
-
 $("locateButton").addEventListener("click", locateCurrentStore);
-$("useManualLocation").addEventListener("click", useManualLocation);
+$("useManualLocation").addEventListener("click", () => void useManualLocation());
+$("confirmLocation").addEventListener("click", confirmLocation);
+$("footfallStart").addEventListener("click", startFootfall);
+$("footfallPause").addEventListener("click", pauseFootfall);
+$("footfallReset").addEventListener("click", resetFootfall);
+document.querySelectorAll("[data-footfall-count]").forEach((button) => {
+  button.addEventListener("click", () => incrementFootfall(button.dataset.footfallCount));
+});
 $("manualLocation").addEventListener("keydown", (event) => {
   if (event.key === "Enter") {
     event.preventDefault();
     void useManualLocation();
   }
 });
-$("locationNext").addEventListener("click", () => setStep(3));
-$("moneyNext").addEventListener("click", () => { if (validateMoney()) setStep(4); });
-$("calculateButton").addEventListener("click", () => {
-  if (!validateEvidence()) return;
-  renderResult(DecisionEngine.assess(collectInput()));
+$("beginInterview").addEventListener("click", () => void beginInterview());
+$("pauseInterview").addEventListener("click", pauseInterview);
+$("finishInterview").addEventListener("click", finishInterview);
+$("textFallback").addEventListener("submit", (event) => {
+  event.preventDefault();
+  const text = $("fallbackAnswer").value.trim();
+  if (!text) return;
+  $("fallbackAnswer").value = "";
+  if (state.interview.mode === "remote" && state.ws?.readyState === WebSocket.OPEN) {
+    $("liveTranscript").textContent = text;
+    void submitRemoteTurn(text);
+  } else {
+    $("liveTranscript").textContent = text;
+    handleLocalFinal(text);
+  }
 });
+$("fallbackAnswer").addEventListener("keydown", (event) => {
+  if (event.key === "Enter" && !event.shiftKey) {
+    event.preventDefault();
+    $("textFallback").requestSubmit();
+  }
+});
+$("startAnalysis").addEventListener("click", () => void startAnalysis());
 $("restartButton").addEventListener("click", resetFlow);
 $("loadDemoButton").addEventListener("click", loadDemo);
 

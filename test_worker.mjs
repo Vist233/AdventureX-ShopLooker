@@ -1,12 +1,33 @@
 import assert from "node:assert/strict";
-import worker from "./worker.mjs";
+import worker, {
+  AgentGate,
+  asrSessionConfig,
+  claimAnalysisRound,
+  consumeDailyAnalysisBudget,
+  enqueueAnalysisRound,
+  handleQueueMessageFailure,
+  normalizeAsrClientEvent,
+  publicRunSnapshot,
+  releaseAnalysisRoundClaim
+} from "./worker.mjs";
 
 const originalFetch = globalThis.fetch;
 const upstreamCalls = [];
+let stepfunActive = 0;
+let stepfunMaxActive = 0;
 
 globalThis.fetch = async (input, init = {}) => {
   const url = new URL(input);
   upstreamCalls.push({ url, init });
+  if (url.hostname === "api.stepfun.com") {
+    stepfunActive += 1;
+    stepfunMaxActive = Math.max(stepfunMaxActive, stepfunActive);
+    await new Promise((resolve) => setTimeout(resolve, 2));
+    stepfunActive -= 1;
+    return Response.json({
+      choices: [{ message: { content: JSON.stringify({ ok: true }) } }]
+    });
+  }
 
   if (url.pathname.includes("/location/v1/ip")) {
     return Response.json({
@@ -76,8 +97,36 @@ const request = (path, headers = {}) => worker.fetch(
   new Request(`https://example.com${path}`, { headers }),
   env
 );
+const apiRequest = (path, { method = "GET", token, body, headers = {} } = {}) => worker.fetch(
+  new Request(`https://example.com${path}`, {
+    method,
+    headers: {
+      ...headers,
+      ...(token ? { "X-Case-Token": token } : {}),
+      ...(body ? { "Content-Type": "application/json" } : {})
+    },
+    body: body ? JSON.stringify(body) : undefined
+  }),
+  env
+);
 
 try {
+  const asrConfig = asrSessionConfig({});
+  assert.equal(asrConfig.session.audio.input.format.codec, "pcm_s16le");
+  assert.equal(asrConfig.session.audio.input.format.rate, 16000);
+  assert.equal(asrConfig.session.audio.input.transcription.model, "stepaudio-2.5-asr-stream");
+  assert.equal(asrConfig.session.audio.input.transcription.full_rerun_on_commit, true);
+  assert.equal(asrConfig.session.audio.input.turn_detection.silence_duration_ms, 600);
+  const normalizedAudio = normalizeAsrClientEvent({
+    type: "input_audio_buffer.append",
+    audio: "AQID"
+  });
+  assert.equal(normalizedAudio.type, "input_audio_buffer.append");
+  assert.equal(normalizedAudio.audio, "AQID");
+  assert.match(normalizedAudio.event_id, /^event_/);
+  assert.equal(normalizeAsrClientEvent({ type: "session.update", session: {} }), null);
+  assert.equal(normalizeAsrClientEvent({ type: "dangerous.unapproved.command" }), null);
+
   const gpsStart = upstreamCalls.length;
   const gpsResponse = await request("/api/map/context?lat=31.22&lng=121.47&category=咖啡");
   assert.equal(gpsResponse.status, 200);
@@ -150,8 +199,542 @@ try {
 
   const asset = await request("/");
   assert.equal(await asset.text(), "asset");
+
+  const createdResponse = await apiRequest("/api/cases", {
+    method: "POST",
+    body: { stage: "operating" }
+  });
+  assert.equal(createdResponse.status, 201);
+  const created = await createdResponse.json();
+  assert.match(created.case.id, /^case_/);
+  assert.match(created.caseToken, /^token_/);
+
+  const missingLocation = await apiRequest(`/api/cases/${created.case.id}/turns`, {
+    method: "POST",
+    token: created.caseToken,
+    body: { turnId: "turn-1", transcript: "一个月大约十万元" }
+  });
+  assert.equal(missingLocation.status, 409);
+
+  const locationResponse = await apiRequest(`/api/cases/${created.case.id}/location`, {
+    method: "POST",
+    token: created.caseToken,
+    body: {
+      confirmed: true,
+      context: {
+        location: { address: "上海市黄浦区测试路1号" },
+        nearby: { count: 2 }
+      }
+    }
+  });
+  assert.equal(locationResponse.status, 200);
+  assert.equal((await locationResponse.json()).firstQuestion.complete, false);
+
+  const turnResponse = await apiRequest(`/api/cases/${created.case.id}/turns`, {
+    method: "POST",
+    token: created.caseToken,
+    body: { turnId: "turn-1", transcript: "已经营业，最近主要想先止损" }
+  });
+  assert.equal(turnResponse.status, 200);
+  const turn = await turnResponse.json();
+  assert.equal(turn.mode, "deterministic-fallback");
+  assert.equal(turn.nextQuestion.complete, false);
+  const duplicateTurnResponse = await apiRequest(`/api/cases/${created.case.id}/turns`, {
+    method: "POST",
+    token: created.caseToken,
+    body: { turnId: "turn-1", transcript: "重复提交不应再次处理" }
+  });
+  assert.equal(duplicateTurnResponse.status, 200);
+  assert.equal((await duplicateTurnResponse.json()).duplicate, true);
+
+  const staleTurnResponse = await apiRequest(`/api/cases/${created.case.id}/turns`, {
+    method: "POST",
+    token: created.caseToken,
+    body: {
+      turnId: "turn-stale",
+      transcript: "这是基于旧问题的迟到回答",
+      expectedVersion: turn.version - 1
+    }
+  });
+  assert.equal(staleTurnResponse.status, 409);
+  assert.equal((await staleTurnResponse.json()).code, "CASE_VERSION_CONFLICT");
+
+  const reviewResponse = await apiRequest(`/api/cases/${created.case.id}/review`, {
+    method: "POST",
+    token: created.caseToken,
+    body: {
+      corrections: [
+        { id: "monthlyRevenue", value: 100000, unit: "元", period: "月", status: "confirmed" },
+        { id: "cashReserve", value: 50000, unit: "元", status: "confirmed" }
+      ]
+    }
+  });
+  assert.equal(reviewResponse.status, 200);
+  const reviewed = await reviewResponse.json();
+
+  const analyzeResponse = await apiRequest(`/api/cases/${created.case.id}/analyze`, {
+    method: "POST",
+    token: created.caseToken,
+    body: {
+      deterministicResult: {
+        decision: "TEST",
+        title: "先测试",
+        reason: "证据不足",
+        metrics: { grossMargin: 0.55, runway: 5 }
+      }
+    }
+  });
+  assert.equal(analyzeResponse.status, 202);
+  const analyze = await analyzeResponse.json();
+  assert.match(analyze.runId, /^run_/);
+
+  const runResponse = await apiRequest(
+    `/api/cases/${created.case.id}/runs/${analyze.runId}`,
+    { token: created.caseToken }
+  );
+  assert.equal(runResponse.status, 200);
+  const run = await runResponse.json();
+  assert.equal(run.status, "completed");
+  assert.equal(run.result.mode, "deterministic-fallback");
+  assert.equal(run.result.top3.length, 0);
+  assert.match(run.result.explanation.headline, /先/);
+  assert.notEqual(run.result.deterministic.title, "先测试");
+  assert.notDeepEqual(run.result.deterministic.metrics, { grossMargin: 0.55, runway: 5 });
+  assert.equal("claimToken" in run, false);
+  assert.equal("claimedRound" in run, false);
+  assert.equal("claimExpiresAt" in run, false);
+
+  const duplicateReviewResponse = await apiRequest(`/api/cases/${created.case.id}/review`, {
+    method: "POST",
+    token: created.caseToken,
+    body: {
+      corrections: [
+        { id: "monthlyRevenue", value: 100000, unit: "元", period: "月", status: "confirmed" },
+        { id: "cashReserve", value: 50000, unit: "元", status: "confirmed" }
+      ]
+    }
+  });
+  assert.equal(duplicateReviewResponse.status, 200);
+  const duplicateReview = await duplicateReviewResponse.json();
+  assert.equal(duplicateReview.unchanged, true);
+  assert.equal(duplicateReview.version, reviewed.version);
+
+  const reusedAnalysisResponse = await apiRequest(`/api/cases/${created.case.id}/analyze`, {
+    method: "POST",
+    token: created.caseToken,
+    body: {
+      deterministicResult: {
+        decision: "TEST",
+        title: "不应重复调用",
+        reason: "同一版本复用结果",
+        metrics: {}
+      }
+    }
+  });
+  assert.equal(reusedAnalysisResponse.status, 200);
+  const reusedAnalysis = await reusedAnalysisResponse.json();
+  assert.equal(reusedAnalysis.runId, analyze.runId);
+  assert.equal(reusedAnalysis.reused, true);
+
+  const asrFallback = await apiRequest(`/api/cases/${created.case.id}/interview`, {
+    token: created.caseToken
+  });
+  assert.equal(asrFallback.status, 426);
+
+  const ttsFallback = await apiRequest("/api/tts", {
+    method: "POST",
+    token: created.caseToken,
+    body: { caseId: created.case.id, text: "测试语音" }
+  });
+  assert.equal(ttsFallback.status, 503);
+
+  const ttsWithoutCase = await apiRequest("/api/tts", {
+    method: "POST",
+    body: { text: "测试语音" }
+  });
+  assert.equal(ttsWithoutCase.status, 400);
+
+  env.STEPFUN_API_KEY = "server-only-key";
+  for (let index = 0; index < 40; index += 1) {
+    const response = await apiRequest("/api/tts", {
+      method: "POST",
+      token: created.caseToken,
+      body: { caseId: created.case.id, text: `第${index + 1}次播报` }
+    });
+    assert.equal(response.status, 200, `TTS request ${index + 1} should be allowed`);
+  }
+  const ttsOverQuota = await apiRequest("/api/tts", {
+    method: "POST",
+    token: created.caseToken,
+    body: { caseId: created.case.id, text: "第41次播报" }
+  });
+  assert.equal(ttsOverQuota.status, 429);
+  assert.equal((await ttsOverQuota.json()).code, "TTS_QUOTA_EXCEEDED");
+
+  const policyCaseResponse = await apiRequest("/api/cases", {
+    method: "POST",
+    body: { stage: "operating" }
+  });
+  const policyCase = await policyCaseResponse.json();
+  await apiRequest(`/api/cases/${policyCase.case.id}/location`, {
+    method: "POST",
+    token: policyCase.caseToken,
+    body: {
+      confirmed: true,
+      context: { location: { address: "上海市黄浦区程序控制问题1号" } }
+    }
+  });
+  const concurrentTurns = await Promise.all([
+    apiRequest(`/api/cases/${policyCase.case.id}/turns`, {
+      method: "POST",
+      token: policyCase.caseToken,
+      body: { turnId: "turn-policy-a", transcript: "我想先止损" }
+    }),
+    apiRequest(`/api/cases/${policyCase.case.id}/turns`, {
+      method: "POST",
+      token: policyCase.caseToken,
+      body: { turnId: "turn-policy-b", transcript: "我也说一句迟到回答" }
+    })
+  ]);
+  assert.deepEqual(
+    concurrentTurns.map((response) => response.status).sort(),
+    [200, 409]
+  );
+  const committedPolicyTurn = concurrentTurns.find((response) => response.status === 200);
+  const policyPayload = await committedPolicyTurn.json();
+  assert.equal(policyPayload.nextQuestion.field, "category");
+  const rejectedConcurrentTurn = concurrentTurns.find((response) => response.status === 409);
+  assert.equal((await rejectedConcurrentTurn.json()).code, "TURN_IN_PROGRESS");
+  delete env.STEPFUN_API_KEY;
+
+  const missingPlanResponse = await apiRequest(
+    `/api/cases/${created.case.id}/plans/plan_missing/start`,
+    { method: "POST", token: created.caseToken, body: {} }
+  );
+  assert.equal(missingPlanResponse.status, 404);
+
+  const unauthorized = await apiRequest(`/api/cases/${created.case.id}/review`, {
+    method: "POST",
+    body: { corrections: [{ id: "rent", value: 1000, status: "confirmed" }] }
+  });
+  assert.equal(unauthorized.status, 403);
+
+  const gate = new AgentGate({}, { STEPFUN_API_KEY: "server-only-key" });
+  const gateResponses = await Promise.all(Array.from({ length: 12 }, () => gate.fetch(
+    new Request("https://gate.internal/chat", {
+      method: "POST",
+      body: JSON.stringify({ messages: [{ role: "user", content: "test" }] })
+    })
+  )));
+  assert.ok(gateResponses.every((response) => response.status === 200));
+  assert.ok(stepfunMaxActive <= 5, `Durable Object gate exceeded 5: ${stepfunMaxActive}`);
+
+  const durableBuckets = new Map();
+  const durableGate = new AgentGate({
+    storage: {
+      get: async (key) => durableBuckets.get(key),
+      put: async (key, value) => durableBuckets.set(key, value)
+    }
+  }, {});
+  const durableRateResults = [];
+  for (let index = 0; index < 3; index += 1) {
+    const response = await durableGate.fetch(new Request("https://gate.internal/rate", {
+      method: "POST",
+      body: JSON.stringify({
+        action: "analyze",
+        key: "a".repeat(64),
+        limit: 2,
+        windowMs: 60_000
+      })
+    }));
+    durableRateResults.push(await response.json());
+  }
+  assert.deepEqual(durableRateResults.map((item) => item.allowed), [true, true, false]);
+  assert.equal(durableBuckets.size, 1);
+
+  const asrAcquire = async (sessionId) => {
+    const response = await durableGate.fetch(new Request("https://gate.internal/asr/acquire", {
+      method: "POST",
+      body: JSON.stringify({ key: "b".repeat(64), sessionId })
+    }));
+    return response.json();
+  };
+  const asrRelease = async (sessionId) => {
+    const response = await durableGate.fetch(new Request("https://gate.internal/asr/release", {
+      method: "POST",
+      body: JSON.stringify({ key: "b".repeat(64), sessionId })
+    }));
+    return response.json();
+  };
+  assert.equal((await asrAcquire("asr-one")).allowed, true);
+  const concurrentAsr = await asrAcquire("asr-two");
+  assert.equal(concurrentAsr.allowed, false);
+  assert.equal(concurrentAsr.reason, "active");
+  assert.equal((await asrRelease("wrong-session")).released, false);
+  assert.equal((await asrRelease("asr-one")).released, true);
+  assert.equal((await asrAcquire("asr-two")).allowed, true);
+  assert.equal((await asrRelease("asr-two")).released, true);
+  assert.equal((await asrAcquire("asr-three")).allowed, true);
+  assert.equal((await asrRelease("asr-three")).released, true);
+  const asrOverQuota = await asrAcquire("asr-four");
+  assert.equal(asrOverQuota.allowed, false);
+  assert.equal(asrOverQuota.reason, "session-quota");
+  const persistedAsr = durableBuckets.get(`asr:${"b".repeat(64)}`);
+  assert.equal(persistedAsr.sessions, 3);
+  assert.ok(persistedAsr.reservedBytes >= 3 * 40 * 1024 * 1024);
+  assert.ok(persistedAsr.reservedDurationMs >= 3 * 20 * 60 * 1000);
+
+  const dailyEnv = {
+    ANALYSIS_DAILY_BUDGET: "2",
+    ANALYSIS_DAILY_IP_BUDGET: "1",
+    AGENT_GATE: {
+      idFromName: () => ({ name: "global" }),
+      get: () => ({
+        fetch: (input, init) => durableGate.fetch(new Request(input, init))
+      })
+    }
+  };
+  const dailyRequest = (ip) => new Request("https://example.com/api/cases/c/analyze", {
+    method: "POST",
+    headers: { "CF-Connecting-IP": ip }
+  });
+  assert.equal((await consumeDailyAnalysisBudget(dailyRequest("198.51.100.1"), dailyEnv)).allowed, true);
+  const sameIpDaily = await consumeDailyAnalysisBudget(dailyRequest("198.51.100.1"), dailyEnv);
+  assert.equal(sameIpDaily.allowed, false);
+  assert.equal(sameIpDaily.reason, "ip");
+  assert.equal((await consumeDailyAnalysisBudget(dailyRequest("198.51.100.2"), dailyEnv)).allowed, true);
+  const globalDaily = await consumeDailyAnalysisBudget(dailyRequest("198.51.100.3"), dailyEnv);
+  assert.equal(globalDaily.allowed, false);
+  assert.equal(globalDaily.reason, "global");
+
+  env.AGENT_GATE = {
+    idFromName: () => ({ name: "global" }),
+    get: () => ({
+      fetch: async () => Response.json({ allowed: false, retryAfterMs: 1000 })
+    })
+  };
+  const durablyRateLimited = await apiRequest("/api/cases", {
+    method: "POST",
+    headers: { "CF-Connecting-IP": "198.51.100.44" },
+    body: { stage: "operating" }
+  });
+  assert.equal(durablyRateLimited.status, 429);
+  assert.equal((await durablyRateLimited.json()).code, "ACTION_RATE_LIMITED");
+  delete env.AGENT_GATE;
+
+  const claimState = { token: null, round: null, expiresAt: null };
+  const claimDb = {
+    prepare(sql) {
+      return {
+        bind(...values) {
+          return {
+            async run() {
+              if (sql.includes("SET claim_token = ?")) {
+                const [token, round, expiresAt] = values;
+                if (claimState.token && claimState.expiresAt > new Date().toISOString()) {
+                  return { meta: { changes: 0 } };
+                }
+                claimState.token = token;
+                claimState.round = round;
+                claimState.expiresAt = expiresAt;
+                return { meta: { changes: 1 } };
+              }
+              if (sql.includes("SET claim_token = NULL")) {
+                const [, , token, round] = values;
+                if (claimState.token !== token || claimState.round !== round) {
+                  return { meta: { changes: 0 } };
+                }
+                claimState.token = null;
+                claimState.round = null;
+                claimState.expiresAt = null;
+                return { meta: { changes: 1 } };
+              }
+              throw new Error(`unexpected claim SQL: ${sql}`);
+            }
+          };
+        }
+      };
+    }
+  };
+  const claimRun = { id: "run_atomic_claim" };
+  const simultaneousClaims = await Promise.all([
+    claimAnalysisRound({ DB: claimDb }, claimRun, 1, "claim-a"),
+    claimAnalysisRound({ DB: claimDb }, claimRun, 1, "claim-b")
+  ]);
+  assert.equal(simultaneousClaims.filter(Boolean).length, 1);
+  const winningClaim = simultaneousClaims.find(Boolean);
+  await releaseAnalysisRoundClaim({ DB: claimDb }, claimRun, 1, winningClaim);
+  assert.equal(await claimAnalysisRound({ DB: claimDb }, claimRun, 1, "claim-c"), "claim-c");
+
+  const activeClaimRow = {
+    id: "run_claimed_delivery",
+    case_id: "case_claimed_delivery",
+    case_version: 1,
+    status: "running",
+    progress_json: JSON.stringify({ phase: "round-start" }),
+    result_json: "null",
+    state_json: JSON.stringify({
+      context: {},
+      searchState: { round: 0, audited: [], target: 3 }
+    }),
+    warning: "",
+    claim_token: "other-delivery",
+    claimed_round: 1,
+    claim_expires_at: new Date(Date.now() + 120_000).toISOString(),
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString()
+  };
+  const activeClaimDb = {
+    prepare(sql) {
+      return {
+        bind() {
+          return {
+            async first() {
+              if (sql.includes("SELECT * FROM analysis_runs")) return { ...activeClaimRow };
+              return null;
+            },
+            async run() {
+              if (sql.includes("SET claim_token = ?")) return { meta: { changes: 0 } };
+              throw new Error(`unexpected active-claim SQL: ${sql}`);
+            }
+          };
+        }
+      };
+    }
+  };
+  let claimDeliveryAcked = false;
+  let claimDeliveryRetry = null;
+  await worker.queue({
+    messages: [{
+      body: { runId: activeClaimRow.id, round: 1 },
+      attempts: 1,
+      ack: () => { claimDeliveryAcked = true; },
+      retry: (options) => { claimDeliveryRetry = options; }
+    }]
+  }, { DB: activeClaimDb });
+  assert.equal(claimDeliveryAcked, false);
+  assert.ok(claimDeliveryRetry.delaySeconds >= 5);
+  assert.ok(claimDeliveryRetry.delaySeconds <= 600);
+
+  const queuedRun = {
+    id: "run_enqueue_failure",
+    caseId: "case_enqueue_failure",
+    caseVersion: 1,
+    status: "running",
+    progress: {},
+    result: null,
+    context: {},
+    searchState: { round: 0, audited: [] },
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString()
+  };
+  const enqueueFailure = await enqueueAnalysisRound({
+    ANALYSIS_QUEUE: { send: async () => { throw new Error("queue unavailable"); } }
+  }, queuedRun, 1);
+  assert.equal(enqueueFailure.queued, false);
+  assert.equal(queuedRun.status, "failed");
+  assert.equal(queuedRun.progress.phase, "enqueue-failed");
+  assert.match(queuedRun.warning, /queue unavailable/);
+
+  const safeRun = publicRunSnapshot({
+    id: "run_public",
+    status: "running",
+    context: { secret: true },
+    searchState: { private: true },
+    claimToken: "secret-claim",
+    claimedRound: 2,
+    claimExpiresAt: "2099-01-01",
+    queueClaim: { token: "memory-secret" }
+  });
+  assert.deepEqual(safeRun, { id: "run_public", status: "running" });
+
+  const poisonRow = {
+    id: "run_poison",
+    case_id: "case_poison",
+    case_version: 1,
+    status: "running",
+    progress_json: JSON.stringify({ phase: "round-start" }),
+    result_json: "null",
+    state_json: JSON.stringify({
+      context: {},
+      searchState: { round: 0, audited: [], target: 3 }
+    }),
+    warning: "",
+    claim_token: "stale-claim",
+    claimed_round: 1,
+    claim_expires_at: new Date(Date.now() + 60_000).toISOString(),
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString()
+  };
+  const poisonDb = {
+    prepare(sql) {
+      return {
+        bind(...values) {
+          return {
+            async first() {
+              if (sql.includes("SELECT * FROM analysis_runs")) return { ...poisonRow };
+              return null;
+            },
+            async run() {
+              if (sql.includes("INSERT INTO analysis_runs")) {
+                poisonRow.status = values[3];
+                poisonRow.progress_json = values[4];
+                poisonRow.warning = values[7];
+                poisonRow.updated_at = values[9];
+                return { meta: { changes: 1 } };
+              }
+              if (sql.includes("SET claim_token = NULL")) {
+                poisonRow.claim_token = null;
+                poisonRow.claimed_round = null;
+                poisonRow.claim_expires_at = null;
+                return { meta: { changes: 1 } };
+              }
+              throw new Error(`unexpected poison SQL: ${sql}`);
+            }
+          };
+        }
+      };
+    }
+  };
+  let retryOptions = null;
+  await handleQueueMessageFailure({
+    attempts: 3,
+    body: { runId: "run_poison", round: 1 },
+    retry: (options) => { retryOptions = options; }
+  }, { DB: poisonDb }, new Error("poison message"));
+  assert.deepEqual(retryOptions, { delaySeconds: 15 });
+  assert.equal(poisonRow.status, "running");
+  assert.equal(poisonRow.claim_token, "stale-claim");
+
+  await handleQueueMessageFailure({
+    attempts: 4,
+    body: { runId: "run_poison", round: 1 },
+    retry: (options) => { retryOptions = options; }
+  }, { DB: poisonDb }, new Error("poison message"));
+  assert.equal(poisonRow.status, "failed");
+  assert.match(poisonRow.warning, /连续失败/);
+  assert.equal(poisonRow.claim_token, null);
+
+  let scheduledSql = "";
+  let scheduledCutoff = "";
+  const scheduledResult = await worker.scheduled({}, {
+    DB: {
+      prepare(sql) {
+        scheduledSql = sql;
+        return {
+          bind(cutoff) {
+            scheduledCutoff = cutoff;
+            return { run: async () => ({ meta: { changes: 3 } }) };
+          }
+        };
+      }
+    }
+  }, {});
+  assert.match(scheduledSql, /DELETE FROM cases WHERE expires_at <=/);
+  assert.match(scheduledCutoff, /^\d{4}-\d{2}-\d{2}T/);
+  assert.equal(scheduledResult.deleted, 3);
 } finally {
   globalThis.fetch = originalFetch;
 }
 
-console.log("worker map integration: 10 scenarios passed");
+console.log("worker map + case API + deterministic authority + ASR/analysis quotas + queue/DLQ guards: 132 assertions passed");

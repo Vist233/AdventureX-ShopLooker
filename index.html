@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="description" content="店判：用当前位置和几项关键数字，判断餐饮店该继续、测试、停止还是退出。">
+  <meta name="description" content="店判：先确认位置，用持续语音完成经营问诊，再从三个候选方案中选出最多三个可验证行动。">
   <title>店判 · 先判断，再投钱</title>
   <link rel="stylesheet" href="styles.css">
 </head>
@@ -13,277 +13,280 @@
       <span class="brand-mark">判</span>
       <span>店判</span>
     </a>
-    <span class="topbar-proof"><b id="heroTitles">623</b> 个餐饮案例校准</span>
+    <span class="topbar-proof"><b id="heroTitles">623</b> 个真实餐饮案例校准</span>
   </header>
 
   <main id="top">
     <section class="hero">
-      <div class="hero-copy">
-        <span class="eyebrow">先判断，再投钱</span>
-        <h1>这家店，<br><em>还该不该继续？</em></h1>
-        <p>不用写商业计划书。授权当前位置，填几项关键数字，回答三个问题，系统直接告诉你：继续、先测试、停止投入，还是准备退出。</p>
-        <a class="primary-button" href="#judge">开始判断 · 约 2 分钟</a>
+      <div>
+        <span class="eyebrow">先算账，再行动</span>
+        <h1>不用填表，<br><em>把店说清楚。</em></h1>
+        <p>先确认店铺位置，再点一次开始。系统会持续听、逐题问、自动整理，最后让你用选择题纠偏。</p>
+        <a class="primary-button" href="#judge" data-testid="hero-start">开始店铺问诊</a>
       </div>
-      <div class="hero-result" aria-label="产品输出示例">
-        <span>系统不会给你一篇空建议</span>
-        <strong>先别再投钱</strong>
-        <p>每天至少要卖 74 单才能保本。先花 300 元验证门头和客流，不要直接追加 20 万装修。</p>
-        <div>
-          <small>输出</small>
-          <b>继续 / 测试 / 停止 / 退出</b>
-        </div>
+      <div class="hero-result">
+        <small>最后得到的不是一篇空话</small>
+        <strong>最多 3 个方案</strong>
+        <p>每个方案都要有证据、预算、期限、成功线和停止线，并且先通过算账与双重核验。</p>
+        <span>3 个候选 · 双核验 · 不凑数</span>
       </div>
     </section>
 
     <section class="principles" aria-label="判断原则">
-      <span>人流不等于客流</span>
-      <span>营业额不等于利润</span>
-      <span>已经花的钱不等于还要继续</span>
+      <span>位置是背景，不是人流</span>
+      <span>未知不是零</span>
+      <span>先做可逆实验</span>
     </section>
 
     <section class="judge" id="judge">
       <div class="judge-heading">
         <div>
-          <span class="section-kicker">2 分钟完成</span>
-          <h2>只回答系统不知道的事</h2>
+          <span class="section-kicker">一次启动，连续完成</span>
+          <h2 id="flowTitle">先确认店铺位置</h2>
         </div>
-        <ol class="progress" aria-label="判断进度">
-          <li class="active" data-progress="1"><b>1</b><span>阶段</span></li>
-          <li data-progress="2"><b>2</b><span>位置</span></li>
-          <li data-progress="3"><b>3</b><span>账目</span></li>
-          <li data-progress="4"><b>4</b><span>现场</span></li>
+        <ol class="progress" aria-label="问诊进度">
+          <li class="active" data-progress="location"><b>1</b><span>位置</span></li>
+          <li data-progress="interview"><b>2</b><span>问诊</span></li>
+          <li data-progress="review"><b>3</b><span>纠偏</span></li>
+          <li data-progress="result"><b>4</b><span>方案</span></li>
         </ol>
       </div>
 
       <div class="flow-shell">
-        <section class="flow-card active" data-step="1">
+        <section class="flow-card flow-panel active" id="locationPanel" data-panel="location" data-testid="location-step">
           <div class="step-title">
             <span>第一步</span>
-            <h3>你现在最想判断什么？</h3>
-            <p>不用描述问题，先选你所处的阶段。</p>
-          </div>
-          <div class="stage-options">
-            <button type="button" class="choice-card" data-stage="preopen">
-              <i>未</i>
-              <span><b>准备开店 / 接店</b><small>判断租约、加盟、转让和装修值不值得投</small></span>
-            </button>
-            <button type="button" class="choice-card" data-stage="operating">
-              <i>营</i>
-              <span><b>已经营业</b><small>判断应该救、改、缩，还是尽快退出</small></span>
-            </button>
-          </div>
-        </section>
-
-        <section class="flow-card" data-step="2" hidden>
-          <div class="step-title">
-            <span>第二步</span>
-            <h3>你现在就在店里吗？</h3>
-            <p>店判会用腾讯地图读取地址和周边地点。地图只能提供线索，不能代替你观察门头和真实客流。</p>
+            <h3>这次要判断哪家店？</h3>
+            <p>地址必须先由你确认。地图只提供周边线索，绝不把 POI 数量冒充真实人流。</p>
           </div>
 
-          <label class="category-field">
+          <fieldset class="stage-picker">
+            <legend>你现在处于哪个阶段？</legend>
+            <div class="choice-grid" data-testid="stage-options">
+              <button type="button" data-stage="preopen">准备开店 / 接店</button>
+              <button type="button" data-stage="operating">已经营业</button>
+              <button type="button" data-stage="growth">有利润，想增长</button>
+            </div>
+          </fieldset>
+
+          <label class="field">
             <span>这家店卖什么？</span>
-            <input id="category" type="text" maxlength="30" placeholder="例如：咖啡、火锅、快餐">
+            <input id="category" type="text" maxlength="30" placeholder="例如：咖啡、火锅、快餐" data-testid="category-input">
           </label>
 
-          <button class="location-button" id="locateButton" type="button">
+          <button class="location-button" id="locateButton" type="button" data-testid="use-location">
             <span class="location-icon">◎</span>
-            <span><b>使用我现在的位置</b><small>用于向腾讯地图查询，本页不保存</small></span>
+            <span><b>使用我现在的位置</b><small>只用于本次判断，不保存原始坐标</small></span>
           </button>
 
-          <div class="location-status" id="locationStatus" aria-live="polite">
-            <span class="status-dot"></span>
-            <p>等待定位</p>
+          <div class="location-status" id="locationStatus" role="status" aria-live="polite" data-testid="location-status">
+            <span class="status-dot"></span><p>请选择阶段，再取得位置</p>
           </div>
 
-          <div class="map-summary" id="mapSummary" hidden>
+          <div class="map-summary" id="mapSummary" hidden data-testid="map-summary">
             <div>
-              <small>已确认店铺位置</small>
+              <small>地图找到的位置</small>
               <strong id="mapAddress">—</strong>
               <span id="mapDistrict">—</span>
             </div>
             <div>
-              <small>附近同类地点</small>
+              <small>800 米同类地点</small>
               <strong id="mapCompetitors">—</strong>
-              <span>800 米内腾讯地图结果，仅作线索</span>
+              <span>只作周边背景，不代表客流</span>
             </div>
             <div class="nearby-tags" id="nearbyTags"></div>
+            <button id="confirmLocation" class="confirm-location" type="button" data-testid="confirm-location">这是正确位置</button>
           </div>
 
           <details class="manual-location" id="manualLocationDetails">
-            <summary>不在店里或定位失败</summary>
-            <p class="manual-location-hint" id="manualLocationHint">写下城市和商圈，最好补充路名或门牌号；系统会自动查找附近同类店。</p>
-            <label>店铺在哪里<input id="manualLocation" type="text" autocomplete="street-address" enterkeyhint="search" aria-describedby="manualLocationHint" placeholder="例如：上海市黄浦区南京东路 300 号"></label>
-            <button id="useManualLocation" type="button">查找这个位置</button>
+            <summary>不在店里，或定位失败</summary>
+            <p id="manualLocationHint">写下城市、商圈、路名或门牌号，系统会尝试查找。</p>
+            <label class="field">店铺地址
+              <input id="manualLocation" type="text" autocomplete="street-address" enterkeyhint="search" placeholder="例如：上海市黄浦区南京东路 300 号" data-testid="manual-address">
+            </label>
+            <button id="useManualLocation" class="secondary-button" type="button" data-testid="lookup-address">查找这个位置</button>
           </details>
 
-          <div class="step-actions">
-            <button class="back-button" type="button" data-back="1">上一步</button>
-            <button class="next-button" id="locationNext" type="button" disabled>继续填账目</button>
+          <div class="location-proof" id="locationProof" hidden>
+            <span>✓</span><p><b>位置已确认</b><small id="locationProofText">—</small></p>
           </div>
+
+          <button class="primary-button full-width" id="beginInterview" type="button" disabled data-testid="begin-interview">
+            开始问诊并持续录音
+          </button>
+          <p class="privacy-note">点击后只申请一次麦克风权限。原始录音不保存；你可随时暂停或结束。</p>
         </section>
 
-        <section class="flow-card" data-step="3" hidden>
-          <div class="step-title">
-            <span>第三步</span>
-            <h3>填几项你应该知道的数字</h3>
-            <p>统一按一个月填写。人工必须把老板自己的工资算进去。</p>
-          </div>
-
-          <form id="moneyForm" class="money-form">
-            <label class="operating-only">一个月营业额
-              <span class="money-input"><i>¥</i><input id="monthlyRevenue" inputmode="decimal" type="number" min="0" step="1000" placeholder="例如 120000"></span>
-            </label>
-            <label>每卖 100 元，食材和平台大约花多少
-              <span class="money-input suffix"><input id="variableCostRate" inputmode="decimal" type="number" min="1" max="95" step="1" value="45"><i>元</i></span>
-              <small>不知道时先填 45，结果会降低可信度</small>
-            </label>
-            <label>一个月房租＋物业
-              <span class="money-input"><i>¥</i><input id="rent" inputmode="decimal" type="number" min="0" step="1000" placeholder="例如 12000"></span>
-            </label>
-            <label>一个月人工＋老板工资
-              <span class="money-input"><i>¥</i><input id="labor" inputmode="decimal" type="number" min="0" step="1000" placeholder="例如 30000"></span>
-            </label>
-            <label>一个月水电、营销和其他固定支出
-              <span class="money-input"><i>¥</i><input id="otherFixed" inputmode="decimal" type="number" min="0" step="1000" placeholder="例如 8000"></span>
-            </label>
-            <label>现在还能拿出来的现金
-              <span class="money-input"><i>¥</i><input id="cashReserve" inputmode="decimal" type="number" min="0" step="1000" placeholder="例如 100000"></span>
-            </label>
-            <label>平均每单多少钱
-              <span class="money-input"><i>¥</i><input id="avgTicket" inputmode="decimal" type="number" min="1" step="1" placeholder="例如 45"></span>
-            </label>
-            <label class="preopen-only" hidden>签约、加盟、转让和装修一共准备投多少
-              <span class="money-input"><i>¥</i><input id="plannedCommitment" inputmode="decimal" type="number" min="0" step="1000" placeholder="例如 300000"></span>
-            </label>
-
-            <details class="optional-money">
-              <summary>还有负债或其他重要支出</summary>
-              <label>与这家店直接相关的剩余债务
-                <span class="money-input"><i>¥</i><input id="debt" inputmode="decimal" type="number" min="0" step="1000" value="0"></span>
-              </label>
-            </details>
-          </form>
-
-          <div class="step-actions">
-            <button class="back-button" type="button" data-back="2">上一步</button>
-            <button class="next-button" id="moneyNext" type="button">继续看现场</button>
-          </div>
-          <p class="form-error" id="moneyError" aria-live="polite"></p>
-        </section>
-
-        <section class="flow-card" data-step="4" hidden>
-          <div class="step-title">
-            <span>第四步</span>
-            <h3>最后三个现场问题</h3>
-            <p>不知道就选“不确定”。假装知道，比没有答案更危险。</p>
-          </div>
-
-          <div class="evidence-questions">
-            <fieldset>
-              <legend>经过这里的人，大部分会买你这类产品吗？</legend>
-              <div class="answer-row" data-answer-group="trafficMatch">
-                <button type="button" data-value="yes">是</button>
-                <button type="button" data-value="no">不是</button>
-                <button type="button" data-value="unknown">不确定</button>
+        <details class="footfall-tool" id="footfallTool" hidden data-testid="footfall-tool">
+          <summary>
+            <span>
+              <b>现场 20 分钟五段转化计数</b>
+              <small>可选 · 位置确认后即可开始，结果页仍可继续使用</small>
+            </span>
+            <strong id="footfallSummaryCount">尚未计数</strong>
+          </summary>
+          <div class="footfall-body">
+            <div class="footfall-intro">
+              <div>
+                <span class="section-kicker">真实现场证据</span>
+                <h3>看清客流到底断在哪一步</h3>
               </div>
-            </fieldset>
-            <fieldset>
-              <legend>从主要来路，10 秒内能看懂你卖什么和价格吗？</legend>
-              <div class="answer-row" data-answer-group="visibility">
-                <button type="button" data-value="yes">能</button>
-                <button type="button" data-value="no">不能</button>
-                <button type="button" data-value="unknown">不确定</button>
+              <p>地图 POI 只能说明附近有什么，不能替代真实人流。这里不使用摄像头、不做人脸识别、不保存视频。</p>
+            </div>
+            <div class="footfall-timer">
+              <div>
+                <small>本次观察剩余</small>
+                <strong id="footfallClock" aria-live="polite" data-testid="footfall-clock">20:00</strong>
+                <span id="footfallTimerStatus">尚未开始</span>
               </div>
-            </fieldset>
-            <fieldset>
-              <legend id="thirdQuestion">买过的人，会再次回来吗？</legend>
-              <div class="answer-row" data-answer-group="retention">
-                <button type="button" data-value="yes">会</button>
-                <button type="button" data-value="no">不会</button>
-                <button type="button" data-value="unknown">不确定</button>
+              <div class="footfall-timer-actions">
+                <button id="footfallStart" class="primary-button" type="button" data-testid="footfall-start">开始 20 分钟</button>
+                <button id="footfallPause" class="secondary-button" type="button" disabled data-testid="footfall-pause">暂停</button>
+                <button id="footfallReset" class="secondary-button" type="button" data-testid="footfall-reset">重置</button>
               </div>
-            </fieldset>
+            </div>
+            <div class="footfall-counters" aria-label="五段转化计数">
+              <button type="button" data-footfall-count="passers" data-testid="count-passers"><span>① 经过</span><strong id="footfallPassers">0</strong><small>所有从主要来路经过的人</small></button>
+              <button type="button" data-footfall-count="targets" data-testid="count-targets"><span>② 目标顾客</span><strong id="footfallTargets">0</strong><small>看起来属于目标客群</small></button>
+              <button type="button" data-footfall-count="seen" data-testid="count-seen"><span>③ 看见门头</span><strong id="footfallSeen">0</strong><small>明显注意到店或菜单</small></button>
+              <button type="button" data-footfall-count="entered" data-testid="count-entered"><span>④ 进店</span><strong id="footfallEntered">0</strong><small>真正走进店内</small></button>
+              <button type="button" data-footfall-count="orders" data-testid="count-orders"><span>⑤ 下单</span><strong id="footfallOrders">0</strong><small>完成真实支付</small></button>
+            </div>
+            <div class="footfall-rates" id="footfallRates" aria-live="polite" data-testid="footfall-rates">
+              <article><span>目标客群 / 经过</span><strong>—</strong></article>
+              <article><span>看见 / 目标客群</span><strong>—</strong></article>
+              <article><span>进店 / 看见</span><strong>—</strong></article>
+              <article><span>下单 / 进店</span><strong>—</strong></article>
+              <article><span>总成交 / 经过</span><strong>—</strong></article>
+            </div>
+            <p class="footfall-note">计数按钮只有在计时进行中才会增加。每次点击只保存一个匿名数字，作为本次案卷的现场执行证据。</p>
           </div>
-
-          <div class="step-actions">
-            <button class="back-button" type="button" data-back="3">上一步</button>
-            <button class="next-button strong" id="calculateButton" type="button">给我判断</button>
-          </div>
-          <p class="form-error" id="evidenceError" aria-live="polite"></p>
-        </section>
-      </div>
-
-      <section class="result" id="result" hidden aria-live="polite">
-        <div class="result-main">
-          <div class="decision-label"><span id="decisionCode">TEST</span><small id="confidenceLabel">证据完整度 80%</small></div>
-          <h2 id="decisionTitle">先做小测试，暂时不要追加投入</h2>
-          <p id="decisionReason">当前最需要验证的不是“能不能多卖”，而是经过的人是否会看见、进店并再次回来。</p>
-        </div>
-
-        <div class="result-metrics">
-          <article>
-            <span>每天至少卖到</span>
-            <strong id="breakEvenDaily">—</strong>
-            <small id="breakEvenOrders">—</small>
-          </article>
-          <article class="operating-result">
-            <span>每月真实经营结果</span>
-            <strong id="monthlyProfit">—</strong>
-            <small>已扣食材、平台、房租、人工和固定支出</small>
-          </article>
-          <article>
-            <span id="thirdMetricLabel">现金还能撑</span>
-            <strong id="thirdMetricValue">—</strong>
-            <small id="thirdMetricHint">保持现在的情况下</small>
-          </article>
-        </div>
-
-        <div class="one-action">
-          <span>现在只做这一件事</span>
-          <strong id="nextAction">—</strong>
-          <p id="stopLine">—</p>
-        </div>
-
-        <details class="result-details">
-          <summary>查看判断依据和风险</summary>
-          <div class="risk-list" id="riskList"></div>
-          <div class="scenario-list" id="scenarioList"></div>
-          <p>地图 POI 只能描述附近有什么，不能证明谁会经过、能否看见门头或是否购买。最终现场证据仍需人工确认。</p>
         </details>
 
-        <div class="result-actions">
-          <button class="secondary-button" id="restartButton" type="button">重新判断</button>
-          <button class="primary-button" id="loadDemoButton" type="button">载入演示案例</button>
-        </div>
-      </section>
+        <section class="flow-card flow-panel interview-panel" id="interviewPanel" data-panel="interview" hidden data-testid="interview-step">
+          <div class="interview-topline">
+            <span class="listening-pill" id="listeningPill"><i></i><b id="listeningLabel">正在准备</b></span>
+            <span id="questionProgress" data-testid="question-progress">0 / 30</span>
+          </div>
+
+          <div class="question-stage" aria-live="polite">
+            <small>请回答屏幕上的问题</small>
+            <h3 id="currentQuestion" data-testid="current-question">正在准备第一个问题…</h3>
+            <p id="questionHint">问题播报结束后直接说，不需要再点按钮。</p>
+          </div>
+
+          <div class="transcript-shell">
+            <span>实时转写</span>
+            <p id="liveTranscript" aria-live="polite" data-testid="live-transcript">你说的话会显示在这里</p>
+            <small id="transcriptMode">正在连接语音服务…</small>
+          </div>
+
+          <form class="text-fallback" id="textFallback" hidden data-testid="text-fallback">
+            <label for="fallbackAnswer">当前设备无法稳定使用语音，可直接输入这一题</label>
+            <textarea id="fallbackAnswer" rows="3" placeholder="输入答案后按 Enter 发送；Shift + Enter 换行"></textarea>
+            <button type="submit" class="secondary-button">发送这句</button>
+          </form>
+
+          <div class="interview-controls">
+            <button class="secondary-button" id="pauseInterview" type="button" data-testid="pause-interview">暂停</button>
+            <button class="danger-button" id="finishInterview" type="button" data-testid="finish-interview">结束并去纠偏</button>
+          </div>
+          <p class="interview-note" id="interviewNotice" role="status" aria-live="polite">
+            AI 播报时不会上传麦克风音频，避免把自己的声音识别成你的回答。
+          </p>
+        </section>
+
+        <section class="flow-card flow-panel review-panel" id="reviewPanel" data-panel="review" hidden data-testid="review-step">
+          <div class="review-progress">
+            <span id="reviewCounter">1 / 1</span>
+            <div><i id="reviewProgressBar"></i></div>
+          </div>
+          <div class="step-title">
+            <span>第三步</span>
+            <h3>只改明显不对的地方</h3>
+            <p>一张卡一次选择。区间比假装精确更可靠。</p>
+          </div>
+
+          <article class="fact-card" id="factCard" data-testid="fact-card">
+            <small id="factLabel">事实</small>
+            <strong id="factValue">—</strong>
+            <p id="factEvidence">来源：语音转写</p>
+            <div class="fact-options" id="factOptions" role="group" aria-label="纠偏选项" data-testid="fact-options"></div>
+          </article>
+
+          <section class="review-summary" id="reviewSummary" hidden data-testid="review-summary">
+            <span class="section-kicker">店铺档案已整理</span>
+            <h3>现在可以开始算账和找方案</h3>
+            <div id="reviewSummaryList"></div>
+            <p>修改任何关键事实后，旧计算和旧方案都会失效。</p>
+            <button class="primary-button full-width" id="startAnalysis" type="button" data-testid="start-analysis">开始分析 3 个候选方案</button>
+          </section>
+        </section>
+
+        <section class="flow-card flow-panel analysis-panel" id="analysisPanel" data-panel="result" hidden data-testid="analysis-step">
+          <div id="analysisProgress" data-testid="analysis-progress">
+            <span class="analysis-orbit" aria-hidden="true"><i></i><i></i><i></i></span>
+            <span class="section-kicker">正在后台分析</span>
+            <h3 id="analysisTitle">先按勇哥框架算账</h3>
+            <p id="analysisStatus">正在检查单位经济、现金寿命和第一断点…</p>
+            <div class="analysis-track"><i id="analysisProgressBar"></i></div>
+            <ol class="analysis-steps" id="analysisSteps">
+              <li class="active">确定性算账</li>
+              <li>生成 3 个候选</li>
+              <li>证据与因果核验</li>
+              <li>财务与执行核验</li>
+              <li>去重并选出 Top 3</li>
+            </ol>
+          </div>
+
+          <section class="result-shell" id="result" hidden aria-live="polite" data-testid="result">
+            <div class="result-main">
+              <div><span id="decisionCode">TEST</span><small id="confidenceLabel">证据完整度 —</small></div>
+              <h2 id="decisionTitle">—</h2>
+              <p id="decisionReason">—</p>
+            </div>
+            <div class="result-metrics" id="resultMetrics"></div>
+            <div class="narrative" id="narrative"></div>
+            <section class="footfall-result-evidence" id="footfallResultEvidence" data-testid="footfall-result-evidence">
+              <span class="section-kicker">现场五段转化证据</span>
+              <p>尚未进行 20 分钟现场计数。地图 POI 不能代替这项证据。</p>
+            </section>
+
+            <div class="plans-heading">
+              <div><span class="section-kicker">经过搜索和核验</span><h3>最值得先做的方案</h3></div>
+              <span id="candidateCount">3 个候选</span>
+            </div>
+            <div class="plan-list" id="planList" data-testid="top-plans"></div>
+            <details class="rejected">
+              <summary>为什么其他方案被淘汰</summary>
+              <div id="rejectedReasons"></div>
+            </details>
+            <div class="result-actions">
+              <button class="secondary-button" id="restartButton" type="button">重新判断</button>
+              <button class="primary-button" id="loadDemoButton" type="button">运行完整演示</button>
+            </div>
+          </section>
+        </section>
+      </div>
     </section>
 
     <section class="method">
-      <div>
-        <span class="section-kicker">从 623 个案例中得到</span>
-        <h2>用户真正需要的不是经营知识，<br>而是下一笔钱该不该花。</h2>
-      </div>
-      <div class="method-grid">
-        <article><strong>49.8%</strong><span>标题涉及亏损与现金流</span><p>“提高营业额”往往只是已经亏钱之后说得出口的表层请求。</p></article>
-        <article><strong>37.9%</strong><span>标题涉及投入过重</span><p>真正危险的是租约、加盟、装修和转让费带来的不可逆下注。</p></article>
-        <article><strong>98.7%</strong><span>高可信字幕涉及位置与客流</span><p>勇哥先看现场，再算账，最后判断哪一个转化环节断了。</p></article>
-      </div>
+      <span class="section-kicker">判断协议</span>
+      <h2>不是让 AI 猜，<br>而是让它探索，让程序核验。</h2>
       <div class="method-chain">
-        <span>当前位置与周边</span><i>→</i>
-        <span>真实成本和保本线</span><i>→</i>
-        <span>客流转化断点</span><i>→</i>
-        <span>继续 / 测试 / 停止 / 退出</span>
+        <span>位置与事实档案</span><i>→</i><span>确定性算账</span><i>→</i>
+        <span>3 个候选</span><i>→</i><span>双核验保留 1–3 个</span>
       </div>
     </section>
   </main>
 
   <footer>
     <div><span class="brand-mark small">判</span><b>店判</b></div>
-    <p>这是经营决策筛查工具，不替代会计、法律或投资意见。</p>
+    <p>经营决策筛查工具，不替代会计、法律或投资意见。</p>
     <span><b id="heroAccepted">156</b> 份高可信字幕 · <b id="heroExcluded">324</b> 份问题字幕已剔除</span>
   </footer>
 
+  <script src="fact-store.js"></script>
   <script src="decision-engine.js"></script>
   <script src="app.js"></script>
 </body>

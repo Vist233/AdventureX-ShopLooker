@@ -1,3 +1,17 @@
+import { StepFunClient } from "./stepfun-client.js";
+import {
+  createSearchState,
+  finalizeAgentSearch,
+  runAgentRound,
+  runAgentSearch
+} from "./agent-orchestrator.js";
+import {
+  computeServerDecision,
+  evaluateInterviewCompleteness,
+  sanitizeAgentNextQuestion,
+  INTERVIEW_LIMITS
+} from "./server-decision-adapter.mjs";
+
 const json = (body, status = 200) => new Response(JSON.stringify(body), {
   status,
   headers: {
@@ -7,6 +21,205 @@ const json = (body, status = 200) => new Response(JSON.stringify(body), {
   }
 });
 
+const caseStore = new Map();
+const runStore = new Map();
+const rateBuckets = new Map();
+const localAsrSessions = new Map();
+const localTurnLocks = new Set();
+const CASE_TTL_MS = 24 * 60 * 60 * 1000;
+const MAX_JSON_BYTES = 256 * 1024;
+const MAX_TTS_PER_CASE = 40;
+const QUEUE_CLAIM_TTL_MS = 10 * 60 * 1000;
+const QUEUE_MAX_RETRIES = 3;
+const MAX_ASR_SESSIONS_PER_CASE = 3;
+const MAX_ASR_SESSION_MS = 20 * 60 * 1000;
+const MAX_ASR_AUDIO_BYTES = 40 * 1024 * 1024;
+export const ASR_SILENCE_DURATION_MS = 600;
+const DAILY_WINDOW_MS = 26 * 60 * 60 * 1000;
+const SEARCH_TARGET = 3;
+const SEARCH_ROUNDS = 1;
+const SEARCH_CONCURRENCY = 3;
+const DEFAULT_DAILY_ANALYSIS_BUDGET = 25;
+const DEFAULT_DAILY_IP_ANALYSIS_BUDGET = 5;
+const ACTION_RATE_LIMITS = {
+  "create-case": { limit: 12, windowMs: 10 * 60 * 1000 },
+  map: { limit: 60, windowMs: 60 * 1000 },
+  tts: { limit: 60, windowMs: 60 * 1000 },
+  turn: { limit: 40, windowMs: 60 * 1000 },
+  analyze: { limit: 5, windowMs: 10 * 60 * 1000 },
+  "asr-connect": { limit: 6, windowMs: 60 * 60 * 1000 }
+};
+
+export class AgentGate {
+  constructor(state, env) {
+    this.state = state;
+    this.env = env;
+    this.active = 0;
+    this.pending = [];
+    this.rateFallback = new Map();
+    this.rateTail = Promise.resolve();
+  }
+
+  async fetch(request) {
+    if (request.method !== "POST") return new Response("Method not allowed", { status: 405 });
+    const payload = await request.json();
+    const path = new URL(request.url).pathname;
+    if (path === "/rate") {
+      const result = await this.checkRate(payload);
+      return Response.json(result);
+    }
+    if (path === "/asr/acquire") {
+      return Response.json(await this.acquireAsr(payload));
+    }
+    if (path === "/asr/release") {
+      return Response.json(await this.releaseAsr(payload));
+    }
+    return new Promise((resolve) => {
+      this.pending.push({ payload, resolve });
+      this.drain();
+    });
+  }
+
+  serialize(operation) {
+    const result = this.rateTail.then(operation, operation);
+    this.rateTail = result.then(() => undefined, () => undefined);
+    return result;
+  }
+
+  async checkRate(payload) {
+    const action = String(payload?.action || "unknown").replace(/[^a-z0-9_-]/gi, "").slice(0, 40);
+    const key = String(payload?.key || "unknown").replace(/[^a-f0-9]/gi, "").slice(0, 80);
+    const limit = Math.max(1, Math.min(Number(payload?.limit) || 1, 10_000));
+    const windowMs = Math.max(1000, Math.min(Number(payload?.windowMs) || 60_000, 24 * 60 * 60 * 1000));
+    const storageKey = `rate:${action}:${key}`;
+    const execute = async () => {
+      const now = Date.now();
+      const storage = this.state?.storage;
+      const current = storage?.get
+        ? await storage.get(storageKey)
+        : this.rateFallback.get(storageKey);
+      const bucket = !current || Number(current.resetAt) <= now
+        ? { count: 0, resetAt: now + windowMs }
+        : current;
+      bucket.count += 1;
+      if (storage?.put) await storage.put(storageKey, bucket);
+      else this.rateFallback.set(storageKey, bucket);
+      return {
+        allowed: bucket.count <= limit,
+        remaining: Math.max(0, limit - bucket.count),
+        retryAfterMs: Math.max(0, bucket.resetAt - now)
+      };
+    };
+    // DO storage is persistent; this promise chain also makes the read/modify/
+    // write operation atomic within a live AgentGate instance.
+    return this.serialize(execute);
+  }
+
+  async acquireAsr(payload) {
+    const key = String(payload?.key || "").replace(/[^a-f0-9]/gi, "").slice(0, 80);
+    const sessionId = cleanId(payload?.sessionId, 100);
+    if (!key || !sessionId) return { allowed: false, reason: "invalid" };
+    return this.serialize(async () => {
+      const now = Date.now();
+      const storageKey = `asr:${key}`;
+      const storage = this.state?.storage;
+      const existing = storage?.get
+        ? await storage.get(storageKey)
+        : this.rateFallback.get(storageKey);
+      const state = !existing || Number(existing.resetAt) <= now
+        ? {
+            resetAt: now + CASE_TTL_MS,
+            sessions: 0,
+            reservedBytes: 0,
+            reservedDurationMs: 0,
+            activeSessionId: "",
+            activeExpiresAt: 0
+          }
+        : existing;
+      if (state.activeSessionId && Number(state.activeExpiresAt) > now) {
+        return {
+          allowed: false,
+          reason: "active",
+          retryAfterMs: Number(state.activeExpiresAt) - now
+        };
+      }
+      if (Number(state.sessions) >= MAX_ASR_SESSIONS_PER_CASE) {
+        return { allowed: false, reason: "session-quota", retryAfterMs: state.resetAt - now };
+      }
+      state.sessions = Number(state.sessions) + 1;
+      // Reserve the full bounded session before opening the paid upstream. A
+      // crashed relay therefore cannot evade the persistent byte/time quota.
+      state.reservedBytes = Number(state.reservedBytes) + MAX_ASR_AUDIO_BYTES;
+      state.reservedDurationMs = Number(state.reservedDurationMs) + MAX_ASR_SESSION_MS;
+      state.activeSessionId = sessionId;
+      state.activeExpiresAt = now + MAX_ASR_SESSION_MS;
+      if (storage?.put) await storage.put(storageKey, state);
+      else this.rateFallback.set(storageKey, state);
+      return {
+        allowed: true,
+        sessionId,
+        sessionsRemaining: MAX_ASR_SESSIONS_PER_CASE - state.sessions,
+        maxBytes: MAX_ASR_AUDIO_BYTES,
+        maxDurationMs: MAX_ASR_SESSION_MS
+      };
+    });
+  }
+
+  async releaseAsr(payload) {
+    const key = String(payload?.key || "").replace(/[^a-f0-9]/gi, "").slice(0, 80);
+    const sessionId = cleanId(payload?.sessionId, 100);
+    if (!key || !sessionId) return { released: false };
+    return this.serialize(async () => {
+      const storageKey = `asr:${key}`;
+      const storage = this.state?.storage;
+      const state = storage?.get
+        ? await storage.get(storageKey)
+        : this.rateFallback.get(storageKey);
+      if (!state || state.activeSessionId !== sessionId) return { released: false };
+      state.activeSessionId = "";
+      state.activeExpiresAt = 0;
+      if (storage?.put) await storage.put(storageKey, state);
+      else this.rateFallback.set(storageKey, state);
+      return { released: true };
+    });
+  }
+
+  drain() {
+    while (this.active < 5 && this.pending.length) {
+      const job = this.pending.shift();
+      this.active += 1;
+      const client = new StepFunClient(this.env);
+      client.chatJson(job.payload.messages, job.payload.options || {})
+        .then((result) => job.resolve(Response.json({ result })))
+        .catch((error) => job.resolve(Response.json({
+          error: error instanceof Error ? error.message : "StepFun调用失败"
+        }, { status: 502 })))
+        .finally(() => {
+          this.active -= 1;
+          this.drain();
+        });
+    }
+  }
+}
+
+function createTextLlm(env) {
+  const client = new StepFunClient(env);
+  if (!client.configured) return null;
+  if (!env.AGENT_GATE) return client.chatJson.bind(client);
+  const id = env.AGENT_GATE.idFromName("global-stepfun-gate");
+  const gate = env.AGENT_GATE.get(id);
+  return async (messages, options = {}) => {
+    const response = await gate.fetch("https://agent-gate.internal/chat", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ messages, options })
+    });
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.error || "AgentGate调用失败");
+    return payload.result;
+  };
+}
+
 const cleanText = (value, maxLength = 40) => String(value || "")
   .replace(/[^\p{L}\p{N}\s·\-]/gu, "")
   .trim()
@@ -14,6 +227,10 @@ const cleanText = (value, maxLength = 40) => String(value || "")
 
 const trimText = (value, maxLength = 120) => String(value || "")
   .trim()
+  .slice(0, maxLength);
+
+const cleanId = (value, maxLength = 100) => String(value || "")
+  .replace(/[^a-zA-Z0-9_-]/g, "")
   .slice(0, maxLength);
 
 function validCoordinate(lat, lng) {
@@ -249,9 +466,1627 @@ export async function getApproximateLocation(request, env) {
   }
 }
 
+function secureId(prefix) {
+  return `${prefix}_${crypto.randomUUID().replace(/-/g, "")}`;
+}
+
+async function tokenHash(token) {
+  const bytes = new TextEncoder().encode(String(token || ""));
+  const digest = await crypto.subtle.digest("SHA-256", bytes);
+  return [...new Uint8Array(digest)].map((value) => value.toString(16).padStart(2, "0")).join("");
+}
+
+function caseSnapshot(record) {
+  const { token: _token, ...snapshot } = record;
+  return snapshot;
+}
+
+async function persistCase(env, record) {
+  if (!env.DB) return;
+  await env.DB.prepare(`
+    INSERT INTO cases (id, token_hash, stage, location_json, case_json, version, selected_plan_id, tts_count, created_at, updated_at, expires_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(id) DO UPDATE SET
+      stage=excluded.stage, location_json=excluded.location_json, case_json=excluded.case_json,
+      version=excluded.version, selected_plan_id=excluded.selected_plan_id,
+      updated_at=excluded.updated_at, expires_at=excluded.expires_at
+  `).bind(
+    record.id,
+    record.tokenHash || await tokenHash(record.token),
+    record.stage || "",
+    JSON.stringify(record.location),
+    JSON.stringify(caseSnapshot(record)),
+    record.version,
+    record.selectedPlanId,
+    Number(record.ttsCount) || 0,
+    record.createdAt,
+    record.updatedAt,
+    new Date(Date.now() + CASE_TTL_MS).toISOString()
+  ).run();
+}
+
+async function persistCaseIfVersion(env, record, expectedVersion) {
+  if (!env.DB) {
+    caseStore.set(record.id, record);
+    return true;
+  }
+  const result = await env.DB.prepare(`
+    UPDATE cases
+    SET stage = ?, location_json = ?, case_json = ?, version = ?,
+        selected_plan_id = ?, updated_at = ?, expires_at = ?
+    WHERE id = ? AND version = ?
+  `).bind(
+    record.stage || "",
+    JSON.stringify(record.location),
+    JSON.stringify(caseSnapshot(record)),
+    record.version,
+    record.selectedPlanId || null,
+    record.updatedAt,
+    new Date(Date.now() + CASE_TTL_MS).toISOString(),
+    record.id,
+    expectedVersion
+  ).run();
+  return Number(result?.meta?.changes ?? 0) === 1;
+}
+
+async function persistInterviewTurnAudit(env, record, turn) {
+  if (!env.DB) return;
+  try {
+    await env.DB.prepare(`
+      INSERT OR IGNORE INTO interview_turns
+        (id, case_id, field_name, question, transcript, created_at)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `).bind(
+      turn.id,
+      record.id,
+      turn.field || "",
+      turn.question || "",
+      turn.transcript,
+      turn.createdAt
+    ).run();
+  } catch {
+    // The authoritative turn is already in cases.case_json. The normalized
+    // audit table is useful for inspection but must not make a committed turn
+    // appear failed to the caller.
+  }
+}
+
+async function loadCase(env, caseId) {
+  const cached = caseStore.get(caseId);
+  if (!env.DB) return cached || null;
+  // In production D1 is authoritative. A Queue consumer may have updated this
+  // case in another isolate since the local cache entry was created.
+  const row = await env.DB.prepare(
+    "SELECT case_json, token_hash, tts_count FROM cases WHERE id = ? AND expires_at > ?"
+  ).bind(caseId, nowIso()).first();
+  if (!row?.case_json) return null;
+  const record = JSON.parse(row.case_json);
+  record.tokenHash = row.token_hash;
+  record.ttsCount = Number(row.tts_count) || 0;
+  caseStore.set(caseId, record);
+  return record;
+}
+
+async function persistRun(env, run) {
+  if (!env.DB) return;
+  await env.DB.prepare(`
+    INSERT INTO analysis_runs (id, case_id, case_version, status, progress_json, result_json, state_json, warning, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(id) DO UPDATE SET
+      status=excluded.status, progress_json=excluded.progress_json,
+      result_json=excluded.result_json, state_json=excluded.state_json,
+      warning=excluded.warning, updated_at=excluded.updated_at
+  `).bind(
+    run.id, run.caseId, run.caseVersion, run.status,
+    JSON.stringify(run.progress), JSON.stringify(run.result), JSON.stringify({
+      context: run.context,
+      searchState: run.searchState
+    }),
+    run.warning || "", run.createdAt, run.updatedAt
+  ).run();
+}
+
+async function loadRun(env, runId) {
+  const cached = runStore.get(runId);
+  if (!env.DB) return cached || null;
+  // Always refresh persisted runs so HTTP polling cannot remain stuck on a
+  // stale in-isolate "queued" snapshot after another isolate completes it.
+  const row = await env.DB.prepare("SELECT * FROM analysis_runs WHERE id = ?").bind(runId).first();
+  if (!row) return null;
+  const persistedState = JSON.parse(row.state_json || "null") || {};
+  const run = {
+    id: row.id,
+    caseId: row.case_id,
+    caseVersion: row.case_version,
+    status: row.status,
+    progress: JSON.parse(row.progress_json || "null"),
+    result: JSON.parse(row.result_json || "null"),
+    context: persistedState.context,
+    searchState: persistedState.searchState,
+    claimToken: row.claim_token || null,
+    claimedRound: Number(row.claimed_round) || null,
+    claimExpiresAt: row.claim_expires_at || null,
+    warning: row.warning || "",
+    createdAt: row.created_at,
+    updatedAt: row.updated_at
+  };
+  runStore.set(runId, run);
+  return run;
+}
+
+async function insertRunIfAbsent(env, run) {
+  if (!env.DB) return true;
+  const result = await env.DB.prepare(`
+    INSERT INTO analysis_runs (id, case_id, case_version, status, progress_json, result_json, state_json, warning, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(case_id, case_version) DO NOTHING
+  `).bind(
+    run.id, run.caseId, run.caseVersion, run.status,
+    JSON.stringify(run.progress), JSON.stringify(run.result), JSON.stringify({
+      context: run.context,
+      searchState: run.searchState
+    }),
+    run.warning || "", run.createdAt, run.updatedAt
+  ).run();
+  return Number(result?.meta?.changes ?? 0) > 0;
+}
+
+async function findRunForCaseVersion(env, caseId, caseVersion) {
+  if (env.DB) {
+    const row = await env.DB.prepare(
+      "SELECT id FROM analysis_runs WHERE case_id = ? AND case_version = ? LIMIT 1"
+    ).bind(caseId, caseVersion).first();
+    return row?.id ? loadRun(env, row.id) : null;
+  }
+  for (const run of runStore.values()) {
+    if (run.caseId === caseId && run.caseVersion === caseVersion) return run;
+  }
+  return null;
+}
+
+export async function claimAnalysisRound(env, run, requestedRound, claimToken = secureId("claim")) {
+  const expiresAt = new Date(Date.now() + QUEUE_CLAIM_TTL_MS).toISOString();
+  const now = nowIso();
+  if (!env.DB) {
+    const existing = run.queueClaim;
+    if (existing && existing.expiresAt > now) return null;
+    run.queueClaim = { token: claimToken, round: requestedRound, expiresAt };
+    return claimToken;
+  }
+  const result = await env.DB.prepare(`
+    UPDATE analysis_runs
+    SET claim_token = ?, claimed_round = ?, claim_expires_at = ?, updated_at = ?
+    WHERE id = ?
+      AND status NOT IN ('completed', 'failed')
+      AND (claim_token IS NULL OR claim_expires_at IS NULL OR claim_expires_at <= ?)
+  `).bind(
+    claimToken, requestedRound, expiresAt, now, run.id, now
+  ).run();
+  return Number(result?.meta?.changes ?? 0) === 1 ? claimToken : null;
+}
+
+export async function releaseAnalysisRoundClaim(env, run, requestedRound, claimToken) {
+  if (!claimToken) return;
+  if (!env.DB) {
+    if (run.queueClaim?.token === claimToken && run.queueClaim?.round === requestedRound) {
+      run.queueClaim = null;
+    }
+    return;
+  }
+  await env.DB.prepare(`
+    UPDATE analysis_runs
+    SET claim_token = NULL, claimed_round = NULL, claim_expires_at = NULL, updated_at = ?
+    WHERE id = ? AND claim_token = ? AND claimed_round = ?
+  `).bind(nowIso(), run.id, claimToken, requestedRound).run();
+}
+
+function nowIso() {
+  return new Date().toISOString();
+}
+
+function cleanupMemoryStores() {
+  const cutoff = Date.now() - CASE_TTL_MS;
+  for (const [id, value] of caseStore) {
+    if (new Date(value.updatedAt).getTime() < cutoff) caseStore.delete(id);
+  }
+  for (const [id, value] of runStore) {
+    if (new Date(value.updatedAt).getTime() < cutoff) runStore.delete(id);
+  }
+}
+
+function corsHeaders(request, env) {
+  const requestOrigin = request.headers.get("Origin");
+  const allowed = env.APP_ORIGIN || new URL(request.url).origin;
+  const headers = {
+    "Vary": "Origin",
+    "Access-Control-Allow-Headers": "Content-Type, X-Case-Token",
+    "Access-Control-Allow-Methods": "GET, POST, DELETE, OPTIONS"
+  };
+  if (requestOrigin && requestOrigin === allowed) {
+    headers["Access-Control-Allow-Origin"] = requestOrigin;
+  }
+  return headers;
+}
+
+function apiJson(request, env, body, status = 200) {
+  const response = json(body, status);
+  const headers = new Headers(response.headers);
+  Object.entries(corsHeaders(request, env)).forEach(([key, value]) => headers.set(key, value));
+  headers.set("Referrer-Policy", "same-origin");
+  headers.set("Permissions-Policy", "camera=(), geolocation=(self), microphone=(self)");
+  return new Response(response.body, { status: response.status, headers });
+}
+
+function originAllowed(request, env) {
+  const origin = request.headers.get("Origin");
+  if (!origin) return true;
+  const requestUrl = new URL(request.url);
+  const expected = env.APP_ORIGIN || requestUrl.origin;
+  if (origin === expected) return true;
+  try {
+    const originUrl = new URL(origin);
+    const loopback = (hostname) => ["localhost", "127.0.0.1", "::1"].includes(hostname);
+    return loopback(requestUrl.hostname) && loopback(originUrl.hostname);
+  } catch {
+    return false;
+  }
+}
+
+function rateAllowed(request, limit = 90, windowMs = 60_000, namespace = "global") {
+  const key = `${namespace}:${clientIp(request) || "unknown"}`;
+  return localRateAllowed(key, limit, windowMs);
+}
+
+function localRateAllowed(key, limit, windowMs) {
+  const now = Date.now();
+  const bucket = rateBuckets.get(key);
+  if (!bucket || bucket.resetAt <= now) {
+    rateBuckets.set(key, { count: 1, resetAt: now + windowMs });
+    return true;
+  }
+  bucket.count += 1;
+  return bucket.count <= limit;
+}
+
+function rateAction(request, url) {
+  if (request.method === "POST" && url.pathname === "/api/cases") return "create-case";
+  if (request.method === "GET" && url.pathname.startsWith("/api/map/")) return "map";
+  if (request.method === "POST" && url.pathname === "/api/tts") return "tts";
+  if (request.method === "POST" && /^\/api\/cases\/[^/]+\/turns$/.test(url.pathname)) return "turn";
+  if (request.method === "POST" && /^\/api\/cases\/[^/]+\/analyze$/.test(url.pathname)) return "analyze";
+  if (request.method === "GET" && /^\/api\/cases\/[^/]+\/interview$/.test(url.pathname)) return "asr-connect";
+  return "";
+}
+
+async function persistentRateCheck(env, { action, key, limit, windowMs }) {
+  if (!env.AGENT_GATE) {
+    return {
+      allowed: localRateAllowed(`${action}:${key}`, limit, windowMs),
+      retryAfterMs: windowMs
+    };
+  }
+  try {
+    const id = env.AGENT_GATE.idFromName("global-stepfun-gate");
+    const gate = env.AGENT_GATE.get(id);
+    const response = await gate.fetch("https://agent-gate.internal/rate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        action,
+        key,
+        limit,
+        windowMs
+      })
+    });
+    if (!response.ok) throw new Error("rate gate unavailable");
+    return await response.json();
+  } catch {
+    // A transient DO failure must not remove quota protection.
+    return {
+      allowed: localRateAllowed(`${action}:${key}`, limit, windowMs),
+      retryAfterMs: windowMs
+    };
+  }
+}
+
+async function actionRateAllowed(request, env, action) {
+  const policy = ACTION_RATE_LIMITS[action];
+  if (!policy) return true;
+  const ipHash = await tokenHash(clientIp(request) || "unknown");
+  return Boolean((await persistentRateCheck(env, {
+    action,
+    key: ipHash,
+    limit: policy.limit,
+    windowMs: policy.windowMs
+  })).allowed);
+}
+
+function shanghaiDayKey(date = new Date()) {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Shanghai",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit"
+  }).format(date);
+}
+
+export async function consumeDailyAnalysisBudget(request, env) {
+  const day = shanghaiDayKey();
+  const ip = clientIp(request) || "unknown";
+  const configuredIpLimit = Number(env.ANALYSIS_DAILY_IP_BUDGET);
+  const ipLimit = Number.isFinite(configuredIpLimit)
+    ? Math.max(1, Math.min(Math.floor(configuredIpLimit), 50))
+    : DEFAULT_DAILY_IP_ANALYSIS_BUDGET;
+  const ipKey = await tokenHash(`analysis-ip:${ip}:${day}`);
+  const ipResult = await persistentRateCheck(env, {
+    action: "analysis-daily-ip",
+    key: ipKey,
+    limit: ipLimit,
+    windowMs: DAILY_WINDOW_MS
+  });
+  if (!ipResult.allowed) {
+    return {
+      allowed: false,
+      reason: "ip",
+      retryAfterMs: ipResult.retryAfterMs || DAILY_WINDOW_MS,
+      ipLimit
+    };
+  }
+  const configuredLimit = Number(env.ANALYSIS_DAILY_BUDGET);
+  const globalLimit = Number.isFinite(configuredLimit)
+    ? Math.max(1, Math.min(Math.floor(configuredLimit), 500))
+    : DEFAULT_DAILY_ANALYSIS_BUDGET;
+  const globalKey = await tokenHash(`analysis-global:${day}`);
+  const globalResult = await persistentRateCheck(env, {
+    action: "analysis-daily-global",
+    key: globalKey,
+    limit: globalLimit,
+    windowMs: DAILY_WINDOW_MS
+  });
+  if (!globalResult.allowed) {
+    return {
+      allowed: false,
+      reason: "global",
+      retryAfterMs: globalResult.retryAfterMs || DAILY_WINDOW_MS,
+      globalLimit
+    };
+  }
+  return { allowed: true, globalLimit, ipLimit };
+}
+
+async function readJson(request) {
+  const length = Number(request.headers.get("Content-Length") || 0);
+  if (length > MAX_JSON_BYTES) throw Object.assign(new Error("请求内容过大"), { status: 413 });
+  const text = await request.text();
+  if (new TextEncoder().encode(text).byteLength > MAX_JSON_BYTES) {
+    throw Object.assign(new Error("请求内容过大"), { status: 413 });
+  }
+  try {
+    return text ? JSON.parse(text) : {};
+  } catch {
+    throw Object.assign(new Error("JSON格式无效"), { status: 400 });
+  }
+}
+
+async function requireCase(request, env, caseId) {
+  const record = await loadCase(env, caseId);
+  if (!record) throw Object.assign(new Error("案卷不存在或已过期"), { status: 404 });
+  const token = request.headers.get("X-Case-Token") || new URL(request.url).searchParams.get("token");
+  const matches = token && (
+    (record.token && token === record.token) ||
+    (record.tokenHash && await tokenHash(token) === record.tokenHash)
+  );
+  if (!matches) {
+    throw Object.assign(new Error("案卷访问凭证无效"), { status: 403 });
+  }
+  return record;
+}
+
+function normalizeFact(raw, source = "voice") {
+  const id = cleanText(raw?.id || raw?.field, 60);
+  if (!id) return null;
+  const allowedStatus = ["confirmed", "provisional", "assumption", "unknown", "conflict"];
+  const allowedEvidence = ["A", "B", "C", "D", "U"];
+  return {
+    id,
+    field: cleanText(raw?.field || id, 60),
+    value: raw?.value ?? null,
+    range: raw?.range && typeof raw.range === "object" ? raw.range : null,
+    unit: cleanText(raw?.unit, 24),
+    period: cleanText(raw?.period, 24),
+    status: allowedStatus.includes(raw?.status) ? raw.status : "provisional",
+    source: cleanText(raw?.source || source, 24),
+    evidence: allowedEvidence.includes(raw?.evidence) ? raw.evidence : "C",
+    transcript: trimText(raw?.transcript, 500),
+    updatedAt: nowIso()
+  };
+}
+
+function equivalentFact(left, right) {
+  const comparable = (fact) => ({
+    id: fact?.id || "",
+    field: fact?.field || "",
+    value: fact?.value ?? null,
+    range: fact?.range || null,
+    unit: fact?.unit || "",
+    period: fact?.period || "",
+    status: fact?.status || "",
+    source: fact?.source || "",
+    evidence: fact?.evidence || "",
+    transcript: fact?.transcript || ""
+  });
+  return JSON.stringify(comparable(left)) === JSON.stringify(comparable(right));
+}
+
+function interviewPolicyState(record, { facts = record.facts, turns = record.turns } = {}) {
+  return {
+    stage: record.stage,
+    facts,
+    turns,
+    locationConfirmed: record.location?.confirmed === true
+  };
+}
+
+function nextQuestion(record) {
+  return sanitizeAgentNextQuestion(null, interviewPolicyState(record));
+}
+
+function safeFactsForModel(facts) {
+  return Object.fromEntries(Object.entries(facts).map(([id, fact]) => [id, {
+    value: fact.value,
+    range: fact.range,
+    unit: fact.unit,
+    period: fact.period,
+    status: fact.status,
+    evidence: fact.evidence
+  }]));
+}
+
+async function processInterviewTurn(record, transcript, llm) {
+  const attemptedTurn = {
+    field: record.currentQuestion?.field || nextQuestion(record).field
+  };
+  const fallbackState = interviewPolicyState(record, {
+    turns: [...record.turns, attemptedTurn]
+  });
+  const fallback = sanitizeAgentNextQuestion(null, fallbackState);
+  if (!llm) {
+    return { facts: [], nextQuestion: fallback, mode: "deterministic-fallback" };
+  }
+  const response = await llm([
+    {
+      role: "system",
+      content: "你负责餐饮问诊中的事实抽取和下一问。只返回JSON。不得把未知当0，不得把流水当利润；金额必须保存单位和周期；范围保留范围。下一问不超过30个汉字，只问一个问题。"
+    },
+    {
+      role: "user",
+      content: JSON.stringify({
+        transcript,
+        current_question: record.currentQuestion,
+        confirmed_location: record.location,
+        known_facts: safeFactsForModel(record.facts),
+        required_fields: evaluateInterviewCompleteness(interviewPolicyState(record)).requiredFields,
+        output_schema: {
+          facts: [{
+            id: "field", field: "field", value: null, range: null,
+            unit: "", period: "", status: "provisional|unknown|conflict",
+            evidence: "C|D"
+          }],
+          next_question: { field: "field", text: "不超过30字", complete: false },
+          contradictions: []
+        }
+      })
+    }
+  ], {
+    temperature: 0.1,
+    maxTokens: 700,
+    // A live interview should never wait for the text model's full 25-second
+    // default. If the fast path misses this budget, the deterministic question
+    // policy continues immediately and the review screen catches omissions.
+    timeoutMs: 7000
+  });
+  const facts = Array.isArray(response?.facts)
+    ? response.facts.map((fact) => normalizeFact({ ...fact, transcript }, "voice")).filter(Boolean).slice(0, 8)
+    : [];
+  const mergedFacts = { ...record.facts };
+  for (const fact of facts) mergedFacts[fact.id] = fact;
+  const stateAfterTurn = interviewPolicyState(record, {
+    facts: mergedFacts,
+    turns: [...record.turns, attemptedTurn]
+  });
+  const proposed = response?.next_question || {};
+  const next = sanitizeAgentNextQuestion({
+    field: cleanText(proposed.field, 60),
+    text: trimText(proposed.text, 30),
+    complete: proposed.complete === true
+  }, stateAfterTurn);
+  return {
+    facts,
+    nextQuestion: next,
+    contradictions: Array.isArray(response?.contradictions) ? response.contradictions.slice(0, 8) : [],
+    mode: "stepfun"
+  };
+}
+
+async function createCase(request, env) {
+  const body = await readJson(request);
+  const id = secureId("case");
+  const token = secureId("token");
+  const timestamp = nowIso();
+  const record = {
+    id,
+    token,
+    stage: cleanText(body.stage, 30),
+    location: null,
+    facts: {},
+    turns: [],
+    reviews: [],
+    currentQuestion: null,
+    version: 1,
+    latestRunId: null,
+    selectedPlanId: null,
+    ttsCount: 0,
+    createdAt: timestamp,
+    updatedAt: timestamp
+  };
+  caseStore.set(id, record);
+  await persistCase(env, record);
+  return apiJson(request, env, {
+    case: { id, version: 1, createdAt: timestamp },
+    caseToken: token
+  }, 201);
+}
+
+async function saveLocation(request, env, caseId) {
+  const record = await requireCase(request, env, caseId);
+  const body = await readJson(request);
+  if (!body.confirmed || !body.context?.location?.address) {
+    return apiJson(request, env, {
+      code: "LOCATION_NOT_CONFIRMED",
+      message: "必须先从候选位置中确认店铺地址"
+    }, 422);
+  }
+  record.location = {
+    confirmed: true,
+    context: body.context,
+    confirmedAt: nowIso()
+  };
+  record.facts.location = normalizeFact({
+    id: "location",
+    value: body.context.location.address,
+    status: "confirmed",
+    source: "map",
+    evidence: "B"
+  }, "map");
+  record.version += 1;
+  record.updatedAt = nowIso();
+  record.currentQuestion = nextQuestion(record);
+  await persistCase(env, record);
+  return apiJson(request, env, {
+    caseId,
+    version: record.version,
+    location: record.location,
+    firstQuestion: record.currentQuestion
+  });
+}
+
+async function interviewTurn(request, env, caseId) {
+  const record = await requireCase(request, env, caseId);
+  if (!record.location?.confirmed) {
+    return apiJson(request, env, {
+      code: "LOCATION_REQUIRED",
+      message: "请先确认店铺位置"
+    }, 409);
+  }
+  if (record.turns.length >= INTERVIEW_LIMITS.maxTurns) {
+    return apiJson(request, env, {
+      complete: true,
+      reason: "MAX_TURNS",
+      facts: Object.values(record.facts)
+    });
+  }
+  const body = await readJson(request);
+  const transcript = trimText(body.transcript, 4000);
+  if (transcript.length < 2) {
+    return apiJson(request, env, {
+      code: "EMPTY_TRANSCRIPT",
+      message: "没有识别到有效回答，请继续说或选择不知道"
+    }, 422);
+  }
+  const turnId = cleanText(body.turnId, 80) || secureId("turn");
+  const existingTurn = record.turns.find((turn) => turn.id === turnId);
+  if (existingTurn) {
+    return apiJson(request, env, {
+      turnId,
+      duplicate: true,
+      version: record.version,
+      extractedFacts: [],
+      contradictions: [],
+      nextQuestion: record.currentQuestion || nextQuestion(record),
+      complete: Boolean((record.currentQuestion || nextQuestion(record)).complete)
+    });
+  }
+  const expectedVersion = Number(record.version);
+  if (body.expectedVersion != null && Number(body.expectedVersion) !== expectedVersion) {
+    return apiJson(request, env, {
+      code: "CASE_VERSION_CONFLICT",
+      message: "案卷已经被另一轮更新，请使用最新问题重试",
+      version: expectedVersion,
+      nextQuestion: record.currentQuestion || nextQuestion(record)
+    }, 409);
+  }
+  if (localTurnLocks.has(caseId)) {
+    return apiJson(request, env, {
+      code: "TURN_IN_PROGRESS",
+      message: "上一轮仍在处理，请稍后重试同一个回答"
+    }, 409);
+  }
+  localTurnLocks.add(caseId);
+  try {
+    const questionSnapshot = record.currentQuestion || nextQuestion(record);
+    const llm = createTextLlm(env);
+    let processed;
+    try {
+      processed = await processInterviewTurn(record, transcript, llm);
+    } catch (error) {
+      processed = {
+        facts: [],
+        nextQuestion: nextQuestion(record),
+        mode: "deterministic-fallback",
+        warning: error instanceof Error ? error.message : "问诊模型暂时不可用"
+      };
+    }
+    for (const fact of processed.facts) record.facts[fact.id] = fact;
+    const committedTurn = {
+      id: turnId,
+      field: questionSnapshot?.field || "",
+      question: questionSnapshot?.text || "",
+      transcript,
+      createdAt: nowIso()
+    };
+    record.turns.push(committedTurn);
+    record.currentQuestion = processed.mode === "deterministic-fallback" && !processed.facts.length
+      ? nextQuestion(record)
+      : processed.nextQuestion;
+    record.version = expectedVersion + 1;
+    record.updatedAt = nowIso();
+    record.latestRunId = null;
+    if (!await persistCaseIfVersion(env, record, expectedVersion)) {
+      if (env.DB) await loadCase(env, caseId);
+      return apiJson(request, env, {
+        code: "TURN_CONFLICT",
+        message: "另一轮回答已先写入，当前回答没有覆盖它；请按最新问题重试",
+        retryable: true
+      }, 409);
+    }
+    await persistInterviewTurnAudit(env, record, committedTurn);
+    return apiJson(request, env, {
+      turnId,
+      version: record.version,
+      extractedFacts: processed.facts,
+      contradictions: processed.contradictions || [],
+      nextQuestion: record.currentQuestion,
+      complete: record.currentQuestion.complete || record.turns.length >= INTERVIEW_LIMITS.maxTurns,
+      mode: processed.mode,
+      warning: processed.warning
+    });
+  } finally {
+    localTurnLocks.delete(caseId);
+  }
+}
+
+async function reviewFacts(request, env, caseId) {
+  const record = await requireCase(request, env, caseId);
+  const body = await readJson(request);
+  const corrections = Array.isArray(body.corrections)
+    ? body.corrections.slice(0, 80)
+    : Array.isArray(body.facts)
+      ? body.facts.slice(0, 80)
+      : [];
+  if (!corrections.length) {
+    return apiJson(request, env, { code: "NO_CORRECTIONS", message: "没有提交任何确认选项" }, 422);
+  }
+  let changed = 0;
+  for (const correction of corrections) {
+    const id = cleanText(correction.id, 60);
+    if (!id) continue;
+    const existing = record.facts[id] || { id, field: id };
+    const normalized = normalizeFact({
+      ...existing,
+      ...correction,
+      id,
+      source: "choice",
+      evidence: correction.status === "unknown" ? "U" : "B"
+    }, "choice");
+    if (normalized && !equivalentFact(existing, normalized)) {
+      record.facts[id] = normalized;
+      changed += 1;
+    }
+  }
+  if (!changed) {
+    return apiJson(request, env, {
+      caseId,
+      version: record.version,
+      unchanged: true,
+      facts: Object.values(record.facts)
+    });
+  }
+  record.reviews.push({ corrections: changed, createdAt: nowIso() });
+  record.version += 1;
+  record.updatedAt = nowIso();
+  record.latestRunId = null;
+  await persistCase(env, record);
+  return apiJson(request, env, {
+    caseId,
+    version: record.version,
+    facts: Object.values(record.facts)
+  });
+}
+
+function analysisContext(record, _body) {
+  // Client-provided arithmetic is presentation-only and untrusted. The Worker
+  // recomputes the deterministic judgment from the persisted, reviewed facts.
+  const deterministic = computeServerDecision(record);
+  return {
+    facts: safeFactsForModel(record.facts),
+    decision: cleanText(deterministic.decision, 20) || "EVIDENCE",
+    title: trimText(deterministic.title, 160),
+    reason: trimText(deterministic.reason, 500),
+    metrics: deterministic.metrics && typeof deterministic.metrics === "object"
+      ? deterministic.metrics
+      : {},
+    deterministic,
+    flags: {
+      hasStaffCapacityEvidence: Boolean(
+        record.facts.staffCapacity?.status === "confirmed" &&
+        record.facts.staffSchedule?.status === "confirmed"
+      )
+    }
+  };
+}
+
+async function runAnalysis(record, run, env, body) {
+  const context = analysisContext(record, body);
+  const llm = createTextLlm(env);
+  try {
+    const result = await runAgentSearch(context, {
+      llm,
+      concurrency: SEARCH_CONCURRENCY,
+      target: SEARCH_TARGET,
+      maxAttempts: SEARCH_TARGET,
+      onProgress: (progress) => {
+        run.progress = progress;
+        run.updatedAt = nowIso();
+      }
+    });
+    result.deterministic = {
+      decision: context.decision,
+      title: context.title,
+      reason: context.reason,
+      metrics: context.metrics
+    };
+    result.explanation = {
+      headline: context.title || "先看证据，再做下一步",
+      diagnosis: context.reason || "系统已根据确认事实完成确定性判断。",
+      whyThesePlans: result.top3.map((plan) => `${plan.bottleneck}：${plan.mechanism}`),
+      caution: "所有方案都必须按预算、成功线和停止线执行。"
+    };
+    if (llm && result.top3.length) {
+      try {
+        result.explanation = await llm([
+          {
+            role: "system",
+            content: "你是经营结果解释器。只能解释给定的确定性判断和Top方案，不得修改数字、排名、风险、成功线或停止线，不得新增方案。只返回JSON。"
+          },
+          {
+            role: "user",
+            content: JSON.stringify({
+              facts: context.facts,
+              deterministic_result: {
+                decision: context.decision,
+                title: context.title,
+                reason: context.reason,
+                metrics: context.metrics
+              },
+              top_plans: result.top3,
+              output_schema: {
+                headline: "string",
+                diagnosis: "string",
+                evidence: ["string"],
+                unknowns: ["string"],
+                whyThesePlans: ["string"],
+                caution: "string"
+              }
+            })
+          }
+        ], { temperature: 0.15, maxTokens: 1500 });
+      } catch (error) {
+        run.warning = `方案已完成，但AI解释生成失败：${error instanceof Error ? error.message : "unknown"}`;
+      }
+    }
+    run.status = "completed";
+    run.result = result;
+    run.progress = { phase: "completed", completed: result.generated, target: SEARCH_TARGET };
+  } catch (error) {
+    const result = await runAgentSearch(context, { llm: null, target: SEARCH_TARGET });
+    result.deterministic = {
+      decision: context.decision,
+      title: context.title,
+      reason: context.reason,
+      metrics: context.metrics
+    };
+    run.status = "completed";
+    run.result = result;
+    run.warning = error instanceof Error ? error.message : "Agent分析失败，已使用确定性降级";
+  }
+  run.updatedAt = nowIso();
+  await persistRun(env, run);
+}
+
+async function finishQueuedAnalysis(run, env, llm) {
+  const context = run.context;
+  const result = finalizeAgentSearch(context, run.searchState);
+  result.deterministic = {
+    decision: context.decision,
+    title: context.title,
+    reason: context.reason,
+    metrics: context.metrics
+  };
+  result.explanation = {
+    headline: context.title || "先看证据，再做下一步",
+    diagnosis: context.reason || "系统已根据确认事实完成确定性判断。",
+    whyThesePlans: result.top3.map((plan) => `${plan.bottleneck}：${plan.mechanism}`),
+    caution: "所有方案都必须按预算、成功线和停止线执行。"
+  };
+  if (llm && result.top3.length) {
+    try {
+      result.explanation = await llm([
+        {
+          role: "system",
+          content: "你是经营结果解释器。只能解释给定的确定性判断和Top方案，不得修改数字、排名、风险、成功线或停止线，不得新增方案。只返回JSON。"
+        },
+        {
+          role: "user",
+          content: JSON.stringify({
+            facts: context.facts,
+            deterministic_result: result.deterministic,
+            top_plans: result.top3,
+            output_schema: {
+              headline: "string", diagnosis: "string", evidence: ["string"],
+              unknowns: ["string"], whyThesePlans: ["string"], caution: "string"
+            }
+          })
+        }
+      ], { temperature: 0.15, maxTokens: 1500 });
+    } catch (error) {
+      run.warning = `方案已完成，但AI解释生成失败：${error instanceof Error ? error.message : "unknown"}`;
+    }
+  }
+  run.status = "completed";
+  run.result = result;
+  run.progress = { phase: "completed", completed: result.generated, target: SEARCH_TARGET };
+  run.updatedAt = nowIso();
+  await persistRun(env, run);
+}
+
+export async function processAnalysisQueueMessage(message, env) {
+  const runId = cleanId(message?.runId, 100);
+  const requestedRound = Number(message?.round);
+  const run = await loadRun(env, runId);
+  if (!run || ["completed", "failed"].includes(run.status)) return { skipped: "terminal" };
+  const currentRound = run.searchState?.round || 0;
+  if (requestedRound <= currentRound) {
+    // If the worker crashed after persisting a round but before publishing the
+    // next one, a redelivery repairs the chain. Duplicate next-round messages
+    // are harmless because that round is protected by the atomic D1 claim.
+    if (requestedRound === currentRound && currentRound < SEARCH_ROUNDS &&
+        run.searchState?.audited?.length < SEARCH_TARGET && env.ANALYSIS_QUEUE) {
+      await env.ANALYSIS_QUEUE.send({ runId, round: currentRound + 1 });
+    }
+    return { skipped: "already-completed" };
+  }
+  if (requestedRound !== currentRound + 1) throw new Error("队列轮次乱序");
+
+  const claimToken = await claimAnalysisRound(env, run, requestedRound);
+  if (!claimToken) {
+    const expiresAt = new Date(run.claimExpiresAt || 0).getTime();
+    const retryAfterSeconds = Number.isFinite(expiresAt) && expiresAt > Date.now()
+      ? Math.max(5, Math.min(600, Math.ceil((expiresAt - Date.now()) / 1000) + 1))
+      : 30;
+    return { skipped: "claimed", retryAfterSeconds };
+  }
+  let enqueueRound = 0;
+  try {
+    const llm = createTextLlm(env);
+    if (!llm) {
+      await finishQueuedAnalysis(run, env, null);
+      return { completed: true, fallback: true };
+    }
+    run.status = "running";
+    run.progress = { phase: "round-start", round: requestedRound, completed: run.searchState.audited.length, target: SEARCH_TARGET };
+    run.updatedAt = nowIso();
+    await persistRun(env, run);
+
+    run.searchState = await runAgentRound(run.context, run.searchState, {
+      llm,
+      concurrency: SEARCH_CONCURRENCY,
+      onProgress: (progress) => {
+        run.progress = progress;
+        run.updatedAt = nowIso();
+      }
+    });
+    run.updatedAt = nowIso();
+    await persistRun(env, run);
+
+    if (run.searchState.round >= SEARCH_ROUNDS || run.searchState.audited.length >= SEARCH_TARGET) {
+      await finishQueuedAnalysis(run, env, llm);
+      return { completed: true };
+    }
+    run.status = "queued";
+    run.progress = {
+      phase: "round-complete",
+      round: run.searchState.round,
+      completed: run.searchState.audited.length,
+      target: SEARCH_TARGET
+    };
+    await persistRun(env, run);
+    enqueueRound = run.searchState.round + 1;
+  } finally {
+    // Release before enqueuing the next round. Otherwise a fast consumer could
+    // observe the previous round's still-live lease and incorrectly ack it.
+    await releaseAnalysisRoundClaim(env, run, requestedRound, claimToken);
+  }
+  if (enqueueRound) {
+    await env.ANALYSIS_QUEUE.send({ runId, round: enqueueRound });
+  }
+  return { queuedRound: enqueueRound };
+}
+
+async function clearAnalysisClaim(env, run) {
+  if (env.DB) {
+    await env.DB.prepare(`
+      UPDATE analysis_runs
+      SET claim_token = NULL, claimed_round = NULL, claim_expires_at = NULL
+      WHERE id = ?
+    `).bind(run.id).run();
+  } else {
+    run.queueClaim = null;
+  }
+  run.claimToken = null;
+  run.claimedRound = null;
+  run.claimExpiresAt = null;
+}
+
+export async function enqueueAnalysisRound(env, run, round) {
+  run.status = "queued";
+  run.warning = "";
+  run.progress = {
+    phase: "queued",
+    round,
+    completed: run.searchState?.audited?.length || 0,
+    target: SEARCH_TARGET
+  };
+  run.updatedAt = nowIso();
+  await persistRun(env, run);
+  try {
+    await env.ANALYSIS_QUEUE.send({ runId: run.id, round });
+    return { queued: true };
+  } catch (error) {
+    run.status = "failed";
+    run.warning = `分析任务未能进入队列：${error instanceof Error ? error.message : "unknown"}`;
+    run.progress = { ...run.progress, phase: "enqueue-failed" };
+    run.updatedAt = nowIso();
+    await persistRun(env, run);
+    return { queued: false, error };
+  }
+}
+
+async function startAnalysis(request, env, caseId, ctx) {
+  const record = await requireCase(request, env, caseId);
+  const body = await readJson(request);
+  const previous = await findRunForCaseVersion(env, record.id, record.version);
+  if (previous?.status === "completed") {
+    return apiJson(request, env, {
+      runId: previous.id,
+      status: previous.status,
+      reused: true
+    });
+  }
+  if (previous?.status === "failed") {
+    if (body.retryFailed !== true) {
+      return apiJson(request, env, {
+        code: "ANALYSIS_PREVIOUSLY_FAILED",
+        runId: previous.id,
+        status: previous.status,
+        retryable: true,
+        message: "上次分析失败；确认后可用 retryFailed=true 从已保存进度重试"
+      }, 409);
+    }
+    await clearAnalysisClaim(env, previous);
+    const currentRound = Number(previous.searchState?.round) || 0;
+    if (currentRound >= SEARCH_ROUNDS || (previous.searchState?.audited?.length || 0) >= SEARCH_TARGET) {
+      previous.status = "running";
+      previous.updatedAt = nowIso();
+      await persistRun(env, previous);
+      await finishQueuedAnalysis(previous, env, createTextLlm(env));
+      return apiJson(request, env, {
+        runId: previous.id,
+        status: previous.status,
+        retried: true,
+        reusedProgress: true
+      }, previous.status === "completed" ? 200 : 202);
+    }
+    if (env.ANALYSIS_QUEUE) {
+      const queued = await enqueueAnalysisRound(env, previous, currentRound + 1);
+      if (!queued.queued) {
+        return apiJson(request, env, {
+          code: "ANALYSIS_ENQUEUE_FAILED",
+          runId: previous.id,
+          status: "failed",
+          retryable: true,
+          message: previous.warning
+        }, 503);
+      }
+      return apiJson(request, env, {
+        runId: previous.id,
+        status: previous.status,
+        retried: true,
+        reusedProgress: true,
+        queued: true
+      }, 202);
+    }
+    await runAnalysis(record, previous, env, body);
+    return apiJson(request, env, {
+      runId: previous.id,
+      status: previous.status,
+      retried: true,
+      reusedProgress: true
+    });
+  }
+  if (previous && ["queued", "running"].includes(previous.status)) {
+    return apiJson(request, env, {
+      code: "ANALYSIS_ALREADY_RUNNING",
+      runId: previous.id,
+      status: previous.status
+    }, 409);
+  }
+  const budget = await consumeDailyAnalysisBudget(request, env);
+  if (!budget.allowed) {
+    return apiJson(request, env, {
+      code: budget.reason === "global"
+        ? "ANALYSIS_DAILY_BUDGET_EXHAUSTED"
+        : "ANALYSIS_DAILY_IP_LIMIT",
+      message: budget.reason === "global"
+        ? "今日全站分析预算已用完，请明天再试"
+        : `每个网络地址每天最多新建${budget.ipLimit || DEFAULT_DAILY_IP_ANALYSIS_BUDGET}次完整分析`,
+      retryAfterMs: budget.retryAfterMs
+    }, 429);
+  }
+  const id = secureId("run");
+  const timestamp = nowIso();
+  const run = {
+    id,
+    caseId,
+    caseVersion: record.version,
+    status: "running",
+    progress: { phase: "queued", completed: 0, target: SEARCH_TARGET },
+    result: null,
+    context: analysisContext(record, body),
+    searchState: createSearchState({ target: SEARCH_TARGET, maxAttempts: SEARCH_TARGET }),
+    createdAt: timestamp,
+    updatedAt: timestamp
+  };
+  if (env.DB) {
+    const inserted = await insertRunIfAbsent(env, run);
+    if (!inserted) {
+      const raced = await findRunForCaseVersion(env, record.id, record.version);
+      return apiJson(request, env, {
+        code: raced?.status === "completed" ? undefined : "ANALYSIS_ALREADY_EXISTS",
+        runId: raced?.id,
+        status: raced?.status,
+        reused: raced?.status === "completed"
+      }, raced?.status === "completed" ? 200 : 409);
+    }
+  }
+  runStore.set(id, run);
+  record.latestRunId = id;
+  record.updatedAt = timestamp;
+  await persistCase(env, record);
+  if (!env.DB) await persistRun(env, run);
+
+  if (env.ANALYSIS_QUEUE) {
+    if (!env.DB) {
+      run.status = "failed";
+      run.warning = "生产队列需要D1绑定保存累计搜索状态";
+      await persistRun(env, run);
+      return apiJson(request, env, { code: "DB_REQUIRED", message: run.warning }, 503);
+    }
+    run.status = "queued";
+    const queued = await enqueueAnalysisRound(env, run, 1);
+    if (!queued.queued) {
+      return apiJson(request, env, {
+        code: "ANALYSIS_ENQUEUE_FAILED",
+        runId: run.id,
+        status: "failed",
+        retryable: true,
+        message: run.warning
+      }, 503);
+    }
+  } else {
+    // Local/test fallback only. Production config always binds ANALYSIS_QUEUE.
+    await runAnalysis(record, run, env, body);
+  }
+  return apiJson(request, env, {
+    runId: id,
+    status: run.status,
+    progress: run.progress,
+    queued: run.status === "queued"
+  }, 202);
+}
+
+async function getRun(request, env, caseId, runId, asEvents = false) {
+  const record = await requireCase(request, env, caseId);
+  const run = await loadRun(env, runId);
+  if (!run || run.caseId !== record.id) {
+    return apiJson(request, env, { code: "RUN_NOT_FOUND", message: "分析任务不存在" }, 404);
+  }
+  const stale = run.caseVersion !== record.version;
+  const publicRun = publicRunSnapshot(run);
+  const payload = { ...publicRun, stale };
+  if (!asEvents) return apiJson(request, env, payload);
+  const eventPayload = run.status === "completed"
+    ? { type: "complete", result: run.result, progress: 100, stale }
+    : { type: "progress", status: run.status, progress: run.progress, stale };
+  const body = `data: ${JSON.stringify(eventPayload)}\n\n`;
+  return new Response(body, {
+    headers: {
+      "Content-Type": "text/event-stream; charset=utf-8",
+      "Cache-Control": "no-store",
+      "Connection": "keep-alive",
+      ...corsHeaders(request, env)
+    }
+  });
+}
+
+export function publicRunSnapshot(run) {
+  const {
+    context: _context,
+    searchState: _searchState,
+    claimToken: _claimToken,
+    claimedRound: _claimedRound,
+    claimExpiresAt: _claimExpiresAt,
+    queueClaim: _queueClaim,
+    ...publicRun
+  } = run || {};
+  return publicRun;
+}
+
+async function startPlan(request, env, caseId, planId) {
+  const record = await requireCase(request, env, caseId);
+  const run = await loadRun(env, record.latestRunId);
+  if (!run || run.status !== "completed" || run.caseVersion !== record.version) {
+    return apiJson(request, env, {
+      code: "CURRENT_ANALYSIS_REQUIRED",
+      message: "请先完成当前版本的分析"
+    }, 409);
+  }
+  const plan = run.result?.top3?.find((item) => item.id === planId);
+  if (!plan) return apiJson(request, env, { code: "PLAN_NOT_FOUND", message: "方案不存在" }, 404);
+  record.selectedPlanId = planId;
+  record.updatedAt = nowIso();
+  await persistCase(env, record);
+  return apiJson(request, env, {
+    selectedPlanId: planId,
+    checklist: [
+      `准备预算上限：${plan.budget_cap} 元`,
+      `执行动作：${plan.action}`,
+      `连续记录指标：${plan.metric}`,
+      `达到成功线：${plan.success_line}`,
+      `触发停止线：${plan.stop_line}`
+    ],
+    reviewAfterDays: plan.duration_days
+  });
+}
+
+async function consumeTtsQuota(env, record) {
+  if (!env.DB) {
+    if ((Number(record.ttsCount) || 0) >= MAX_TTS_PER_CASE) return false;
+    record.ttsCount = (Number(record.ttsCount) || 0) + 1;
+    return true;
+  }
+  const result = await env.DB.prepare(`
+    UPDATE cases
+    SET tts_count = tts_count + 1, updated_at = ?
+    WHERE id = ? AND tts_count < ?
+  `).bind(nowIso(), record.id, MAX_TTS_PER_CASE).run();
+  const allowed = Number(result?.meta?.changes ?? 0) === 1;
+  if (allowed) record.ttsCount = (Number(record.ttsCount) || 0) + 1;
+  return allowed;
+}
+
+async function ttsResponse(request, env) {
+  const body = await readJson(request);
+  const caseId = cleanId(body.caseId, 80);
+  if (!caseId) {
+    return apiJson(request, env, {
+      code: "CASE_REQUIRED",
+      message: "语音合成必须绑定有效案卷"
+    }, 400);
+  }
+  const record = await requireCase(request, env, caseId);
+  const client = new StepFunClient(env);
+  if (!client.configured) {
+    return apiJson(request, env, { code: "STEPFUN_NOT_CONFIGURED", message: "语音服务尚未配置" }, 503);
+  }
+  if (!await consumeTtsQuota(env, record)) {
+    return apiJson(request, env, {
+      code: "TTS_QUOTA_EXCEEDED",
+      message: `每个案卷最多合成${MAX_TTS_PER_CASE}次语音`
+    }, 429);
+  }
+  const response = await client.tts(body.text, {
+    voice: cleanText(body.voice, 40) || undefined,
+    speed: 1.18
+  });
+  const headers = new Headers(response.headers);
+  headers.set("Cache-Control", "private, no-store");
+  Object.entries(corsHeaders(request, env)).forEach(([key, value]) => headers.set(key, value));
+  return new Response(response.body, { status: response.status, headers });
+}
+
+export function asrSessionConfig(env = {}) {
+  return {
+    type: "session.update",
+    session: {
+      audio: {
+        input: {
+          format: {
+            type: "pcm",
+            codec: "pcm_s16le",
+            rate: 16000,
+            bits: 16,
+            channel: 1
+          },
+          transcription: {
+            model: env.STEPFUN_ASR_MODEL || "stepaudio-2.5-asr-stream",
+            language: "zh",
+            prompt: "餐饮经营、营业额、毛利率、房租、人工、客流、选址、加盟、转让",
+            full_rerun_on_commit: true,
+            enable_itn: true
+          },
+          turn_detection: {
+            type: "server_vad",
+            threshold: 0.5,
+            silence_duration_ms: ASR_SILENCE_DURATION_MS
+          }
+        }
+      }
+    }
+  };
+}
+
+export function normalizeAsrClientEvent(payload) {
+  if (["session.update", "session.start", "answer.text"].includes(payload?.type)) return null;
+  if (payload?.type === "session.finish") {
+    return { event_id: secureId("event"), type: "input_audio_buffer.commit" };
+  }
+  if (payload?.type === "input_audio_buffer.append") {
+    if (typeof payload.audio !== "string" || !payload.audio) return null;
+    return {
+      event_id: cleanId(payload.event_id, 100) || secureId("event"),
+      type: "input_audio_buffer.append",
+      audio: payload.audio
+    };
+  }
+  return null;
+}
+
+async function acquireAsrSession(env, caseId) {
+  const sessionId = secureId("asr");
+  const key = await tokenHash(caseId);
+  if (!env.AGENT_GATE) {
+    const now = Date.now();
+    const existing = localAsrSessions.get(key);
+    const state = !existing || Number(existing.resetAt) <= now
+      ? { resetAt: now + CASE_TTL_MS, sessions: 0, activeSessionId: "", activeExpiresAt: 0 }
+      : existing;
+    if (state.activeSessionId && state.activeExpiresAt > now) {
+      return { allowed: false, reason: "active", retryAfterMs: state.activeExpiresAt - now };
+    }
+    if (state.sessions >= MAX_ASR_SESSIONS_PER_CASE) {
+      return { allowed: false, reason: "session-quota", retryAfterMs: state.resetAt - now };
+    }
+    state.sessions += 1;
+    state.activeSessionId = sessionId;
+    state.activeExpiresAt = now + MAX_ASR_SESSION_MS;
+    localAsrSessions.set(key, state);
+    return { allowed: true, key, sessionId };
+  }
+  const id = env.AGENT_GATE.idFromName("global-stepfun-gate");
+  const gate = env.AGENT_GATE.get(id);
+  const response = await gate.fetch("https://agent-gate.internal/asr/acquire", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ key, sessionId })
+  });
+  if (!response.ok) throw new Error("ASR quota gate unavailable");
+  return { ...(await response.json()), key, sessionId };
+}
+
+async function releaseAsrSession(env, lease) {
+  if (!lease?.key || !lease?.sessionId) return;
+  if (!env.AGENT_GATE) {
+    const state = localAsrSessions.get(lease.key);
+    if (state?.activeSessionId === lease.sessionId) {
+      state.activeSessionId = "";
+      state.activeExpiresAt = 0;
+      localAsrSessions.set(lease.key, state);
+    }
+    return;
+  }
+  const id = env.AGENT_GATE.idFromName("global-stepfun-gate");
+  const gate = env.AGENT_GATE.get(id);
+  await gate.fetch("https://agent-gate.internal/asr/release", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ key: lease.key, sessionId: lease.sessionId })
+  });
+}
+
+function decodedBase64Bytes(value) {
+  if (typeof value !== "string" || !value || value.length % 4 === 1) return -1;
+  if (!/^[A-Za-z0-9+/]*={0,2}$/.test(value)) return -1;
+  const padding = value.endsWith("==") ? 2 : value.endsWith("=") ? 1 : 0;
+  return Math.floor(value.length * 3 / 4) - padding;
+}
+
+async function asrRelay(request, env, caseId, ctx) {
+  await requireCase(request, env, caseId);
+  if (request.headers.get("Upgrade")?.toLowerCase() !== "websocket") {
+    return apiJson(request, env, {
+      code: "WEBSOCKET_REQUIRED",
+      message: "持续语音问诊需要WebSocket连接"
+    }, 426);
+  }
+  if (!globalThis.WebSocketPair) {
+    return apiJson(request, env, {
+      code: "ASR_RELAY_UNAVAILABLE",
+      message: "当前运行环境不支持WebSocket中继；可改用浏览器语音识别或文字模式"
+    }, 501);
+  }
+  const apiKey = String(env.STEPFUN_API_KEYS || env.STEPFUN_API_KEY || env.step_API_KEY || "")
+    .split(/[\s,;]+/)
+    .find(Boolean);
+  if (!apiKey) {
+    return apiJson(request, env, { code: "STEPFUN_NOT_CONFIGURED", message: "语音服务尚未配置" }, 503);
+  }
+  let lease;
+  try {
+    lease = await acquireAsrSession(env, caseId);
+  } catch {
+    return apiJson(request, env, {
+      code: "ASR_QUOTA_GATE_UNAVAILABLE",
+      message: "语音配额服务暂时不可用，请稍后再试"
+    }, 503);
+  }
+  if (!lease.allowed) {
+    return apiJson(request, env, {
+      code: lease.reason === "active" ? "ASR_ALREADY_ACTIVE" : "ASR_SESSION_QUOTA_EXCEEDED",
+      message: lease.reason === "active"
+        ? "这个案卷已有一个语音连接"
+        : `每个案卷最多建立${MAX_ASR_SESSIONS_PER_CASE}次语音会话`,
+      retryAfterMs: lease.retryAfterMs || 0
+    }, 429);
+  }
+
+  // Cloudflare Workers supports outgoing WebSockets through an Upgrade fetch.
+  // This relay is intentionally transparent: audio frames are never persisted.
+  const configuredUrl = env.STEPFUN_ASR_URL || "wss://api.stepfun.com/v1/realtime/asr/stream";
+  const upstreamUrl = configuredUrl.replace(/^wss:/, "https:");
+  let upstreamResponse;
+  try {
+    upstreamResponse = await fetch(upstreamUrl, {
+      headers: {
+        "Authorization": `Bearer ${apiKey}`,
+        "Upgrade": "websocket"
+      }
+    });
+  } catch (error) {
+    await releaseAsrSession(env, lease).catch(() => {});
+    throw error;
+  }
+  const upstream = upstreamResponse.webSocket;
+  if (!upstream) {
+    await releaseAsrSession(env, lease).catch(() => {});
+    return apiJson(request, env, {
+      code: "ASR_UPSTREAM_UNAVAILABLE",
+      message: `StepFun ASR连接失败：${upstreamResponse.status}`
+    }, 502);
+  }
+  upstream.accept();
+  const pair = new WebSocketPair();
+  const [client, server] = Object.values(pair);
+  server.accept();
+  upstream.send(JSON.stringify(asrSessionConfig(env)));
+
+  const startedAt = Date.now();
+  let audioBytes = 0;
+  let leaseReleased = false;
+  const releaseLease = () => {
+    if (leaseReleased) return;
+    leaseReleased = true;
+    const promise = releaseAsrSession(env, lease).catch(() => {});
+    if (ctx?.waitUntil) ctx.waitUntil(promise);
+  };
+  const durationTimer = setTimeout(() => {
+    closeBoth(1008, "session duration exceeded");
+  }, MAX_ASR_SESSION_MS);
+  const closeBoth = (code = 1011, reason = "relay closed") => {
+    clearTimeout(durationTimer);
+    releaseLease();
+    try { server.close(code, reason); } catch {}
+    try { upstream.close(code, reason); } catch {}
+  };
+  server.addEventListener("message", (event) => {
+    if (typeof event.data === "string" && event.data.length > 64 * 1024) return closeBoth(1009, "message too large");
+    if (typeof event.data === "string") {
+      try {
+        const payload = JSON.parse(event.data);
+        const normalized = normalizeAsrClientEvent(payload);
+        if (!normalized) return;
+        if (normalized.type === "input_audio_buffer.append") {
+          const chunkBytes = decodedBase64Bytes(normalized.audio);
+          if (chunkBytes < 0) return closeBoth(1003, "invalid audio");
+          audioBytes += chunkBytes;
+          if (audioBytes > MAX_ASR_AUDIO_BYTES) {
+            return closeBoth(1008, "audio byte quota exceeded");
+          }
+          if (Date.now() - startedAt > MAX_ASR_SESSION_MS) {
+            return closeBoth(1008, "session duration exceeded");
+          }
+        }
+        upstream.send(JSON.stringify(normalized));
+        return;
+      } catch {
+        return closeBoth(1003, "invalid json");
+      }
+    }
+    if (typeof event.data !== "string") return closeBoth(1003, "binary audio not accepted");
+    upstream.send(event.data);
+  });
+  upstream.addEventListener("message", (event) => server.send(event.data));
+  server.addEventListener("close", () => {
+    clearTimeout(durationTimer);
+    releaseLease();
+    try { upstream.close(1000, "client closed"); } catch {}
+  });
+  upstream.addEventListener("close", () => {
+    clearTimeout(durationTimer);
+    releaseLease();
+    try { server.close(1000, "upstream closed"); } catch {}
+  });
+  server.addEventListener("error", () => closeBoth());
+  upstream.addEventListener("error", () => closeBoth());
+
+  return new Response(null, { status: 101, webSocket: client });
+}
+
+async function routeCases(request, env, ctx, url) {
+  const parts = url.pathname.split("/").filter(Boolean);
+  if (request.method === "POST" && parts.length === 2) return createCase(request, env);
+  const caseId = cleanId(parts[2], 80);
+  if (!caseId) return null;
+  if (request.method === "POST" && parts[3] === "location") return saveLocation(request, env, caseId);
+  if (request.method === "POST" && parts[3] === "turns") return interviewTurn(request, env, caseId);
+  if (request.method === "GET" && parts[3] === "interview") return asrRelay(request, env, caseId, ctx);
+  if (request.method === "POST" && parts[3] === "review") return reviewFacts(request, env, caseId);
+  if (request.method === "POST" && parts[3] === "analyze") return startAnalysis(request, env, caseId, ctx);
+  if (request.method === "GET" && parts[3] === "runs" && parts[4]) {
+    return getRun(request, env, caseId, cleanId(parts[4], 80), parts[5] === "events");
+  }
+  if (request.method === "POST" && parts[3] === "plans" && parts[4] && parts[5] === "start") {
+    return startPlan(request, env, caseId, cleanId(parts[4], 80));
+  }
+  if (request.method === "DELETE" && parts.length === 3) {
+    const record = await requireCase(request, env, caseId);
+    if (record.latestRunId) runStore.delete(record.latestRunId);
+    caseStore.delete(caseId);
+    if (env.DB) {
+      await env.DB.prepare("DELETE FROM cases WHERE id = ?").bind(caseId).run();
+    }
+    return apiJson(request, env, { deleted: true });
+  }
+  return null;
+}
+
+async function markQueueRunFailed(message, env, error) {
+  const runId = cleanId(message?.runId, 100);
+  const run = await loadRun(env, runId);
+  if (!run || run.status === "completed") return;
+  run.status = "failed";
+  run.warning = `队列连续失败，已停止继续调用模型：${error instanceof Error ? error.message : "unknown"}`;
+  run.progress = {
+    ...(run.progress || {}),
+    phase: "failed",
+    failedRound: Number(message?.round) || null
+  };
+  run.updatedAt = nowIso();
+  await persistRun(env, run);
+  if (env.DB) {
+    await env.DB.prepare(`
+      UPDATE analysis_runs
+      SET claim_token = NULL, claimed_round = NULL, claim_expires_at = NULL
+      WHERE id = ?
+    `).bind(runId).run();
+  } else {
+    run.queueClaim = null;
+  }
+}
+
+export async function handleQueueMessageFailure(message, env, error) {
+  // Cloudflare's max_retries counts retries after the initial delivery.
+  // With max_retries=3 the terminal delivery is attempts=4. Marking the run
+  // failed earlier would make the next delivery look terminal and get acked,
+  // silently preventing the poison message from reaching the configured DLQ.
+  if (Number(message.attempts) >= QUEUE_MAX_RETRIES + 1) {
+    await markQueueRunFailed(message.body, env, error);
+  }
+  // Never ack a failed delivery. On the exhausted delivery this retry request
+  // is what causes Queues to move the message to its dead-letter queue.
+  message.retry({ delaySeconds: 15 });
+}
+
 export default {
-  async fetch(request, env) {
+  async queue(batch, env) {
+    for (const message of batch.messages) {
+      try {
+        const outcome = await processAnalysisQueueMessage(message.body, env);
+        if (outcome?.skipped === "claimed") {
+          // Another delivery owns the D1 lease. Acking here can strand a run
+          // if that owner crashes, so retain this delivery until the lease
+          // expires and let the next attempt repair the chain.
+          message.retry({ delaySeconds: outcome.retryAfterSeconds || 30 });
+          continue;
+        }
+        message.ack();
+      } catch (error) {
+        console.error("analysis queue round failed", {
+          runId: cleanId(message.body?.runId, 100),
+          round: Number(message.body?.round),
+          error: error instanceof Error ? error.message : "unknown"
+        });
+        await handleQueueMessageFailure(message, env, error);
+      }
+    }
+  },
+
+  async scheduled(_event, env, _ctx) {
+    if (!env.DB) return { deleted: 0 };
+    const result = await env.DB.prepare(
+      "DELETE FROM cases WHERE expires_at <= ?"
+    ).bind(nowIso()).run();
+    return { deleted: Number(result?.meta?.changes ?? 0) };
+  },
+
+  async fetch(request, env, ctx) {
     const url = new URL(request.url);
+    cleanupMemoryStores();
+    if (request.method === "OPTIONS") {
+      return new Response(null, { status: 204, headers: corsHeaders(request, env) });
+    }
+    if (url.pathname.startsWith("/api/") && !originAllowed(request, env)) {
+      return apiJson(request, env, { code: "ORIGIN_DENIED", message: "请求来源不允许" }, 403);
+    }
+    if (url.pathname.startsWith("/api/") && !rateAllowed(request)) {
+      return apiJson(request, env, { code: "RATE_LIMITED", message: "请求过于频繁，请稍后再试" }, 429);
+    }
+    const action = rateAction(request, url);
+    if (action && !await actionRateAllowed(request, env, action)) {
+      return apiJson(request, env, {
+        code: "ACTION_RATE_LIMITED",
+        message: "这项操作过于频繁，请稍后再试"
+      }, 429);
+    }
     if (request.method === "GET" && url.pathname === "/api/map/context") {
       return getMapContext(url, env);
     }
@@ -260,6 +2095,30 @@ export default {
     }
     if (request.method === "GET" && url.pathname === "/api/map/ip-location") {
       return getApproximateLocation(request, env);
+    }
+    if (request.method === "POST" && url.pathname === "/api/tts") {
+      try {
+        return await ttsResponse(request, env);
+      } catch (error) {
+        return apiJson(request, env, {
+          code: "TTS_ERROR",
+          message: error instanceof Error ? error.message : "语音合成失败"
+        }, Number(error?.status) || 502);
+      }
+    }
+    if (url.pathname.startsWith("/api/cases")) {
+      try {
+        const response = await routeCases(request, env, ctx, url);
+        if (response) return response;
+      } catch (error) {
+        return apiJson(request, env, {
+          code: "CASE_API_ERROR",
+          message: error instanceof Error ? error.message : "案卷服务异常"
+        }, Number(error?.status) || 500);
+      }
+    }
+    if (url.pathname.startsWith("/api/")) {
+      return apiJson(request, env, { code: "NOT_FOUND", message: "接口不存在" }, 404);
     }
     if (!env.ASSETS) return new Response("Not found", { status: 404 });
     return env.ASSETS.fetch(request);

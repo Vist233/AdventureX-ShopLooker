@@ -13,7 +13,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
 DIST = ROOT / "dist"
-PUBLIC_FILES = ("index.html", "styles.css", "decision-engine.js", "app.js")
+PUBLIC_FILES = ("index.html", "styles.css", "fact-store.js", "decision-engine.js", "app.js")
 PUBLIC_DATA = ("corpus_analysis.json",)
 
 
@@ -32,8 +32,8 @@ def main() -> None:
   X-Content-Type-Options: nosniff
   X-Frame-Options: SAMEORIGIN
   Referrer-Policy: strict-origin-when-cross-origin
-  Permissions-Policy: camera=(), microphone=(), geolocation=(self)
-  Cache-Control: public, max-age=300
+  Permissions-Policy: camera=(), microphone=(self), geolocation=(self)
+  Cache-Control: no-cache, max-age=0, must-revalidate
 """,
         encoding="utf-8",
     )
