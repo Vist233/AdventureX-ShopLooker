@@ -45,10 +45,22 @@ def require(condition: bool, message: str) -> None:
 
 
 def read_limited(response: Any, limit: int) -> bytes:
-    body = response.read(limit + 1)
-    if len(body) > limit:
-        raise AcceptanceError(f"response exceeded the {limit}-byte safety limit")
-    return body
+    chunks: list[bytes] = []
+    total = 0
+    # Cloudflare static assets may be delivered without Content-Length. A
+    # single ``read(limit + 1)`` then waits for the full multi-megabyte limit
+    # instead of returning the already-complete small body. ``read1`` consumes
+    # the available HTTP chunk and still lets us enforce the same hard cap.
+    read_chunk = getattr(response, "read1", response.read)
+    while True:
+        chunk = read_chunk(min(64 * 1024, limit + 1 - total))
+        if not chunk:
+            break
+        chunks.append(chunk)
+        total += len(chunk)
+        if total > limit:
+            raise AcceptanceError(f"response exceeded the {limit}-byte safety limit")
+    return b"".join(chunks)
 
 
 @dataclass
