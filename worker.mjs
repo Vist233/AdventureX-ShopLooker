@@ -483,6 +483,15 @@ function caseSnapshot(record) {
   return snapshot;
 }
 
+function cloneCaseRecord(record) {
+  // Case records are JSON-compatible by construction. Work on a detached
+  // value so a failed compare-and-swap cannot leak partial facts/turns into
+  // this isolate's authoritative cache.
+  return typeof structuredClone === "function"
+    ? structuredClone(record)
+    : JSON.parse(JSON.stringify(record));
+}
+
 async function persistCase(env, record) {
   if (!env.DB) return;
   await env.DB.prepare(`
@@ -509,6 +518,8 @@ async function persistCase(env, record) {
 
 async function persistCaseIfVersion(env, record, expectedVersion) {
   if (!env.DB) {
+    const current = caseStore.get(record.id);
+    if (!current || Number(current.version) !== Number(expectedVersion)) return false;
     caseStore.set(record.id, record);
     return true;
   }
@@ -528,7 +539,9 @@ async function persistCaseIfVersion(env, record, expectedVersion) {
     record.id,
     expectedVersion
   ).run();
-  return Number(result?.meta?.changes ?? 0) === 1;
+  const committed = Number(result?.meta?.changes ?? 0) === 1;
+  if (committed) caseStore.set(record.id, record);
+  return committed;
 }
 
 async function persistInterviewTurnAudit(env, record, turn) {
@@ -1109,7 +1122,15 @@ async function interviewTurn(request, env, caseId) {
     });
   }
   const expectedVersion = Number(record.version);
-  if (body.expectedVersion != null && Number(body.expectedVersion) !== expectedVersion) {
+  const suppliedVersion = body.expectedVersion ?? body.caseVersion;
+  if (suppliedVersion != null && !Number.isInteger(Number(suppliedVersion))) {
+    return apiJson(request, env, {
+      code: "CASE_VERSION_INVALID",
+      message: "案卷版本格式无效",
+      version: expectedVersion
+    }, 422);
+  }
+  if (suppliedVersion != null && Number(suppliedVersion) !== expectedVersion) {
     return apiJson(request, env, {
       code: "CASE_VERSION_CONFLICT",
       message: "案卷已经被另一轮更新，请使用最新问题重试",
@@ -1125,20 +1146,21 @@ async function interviewTurn(request, env, caseId) {
   }
   localTurnLocks.add(caseId);
   try {
-    const questionSnapshot = record.currentQuestion || nextQuestion(record);
+    const working = cloneCaseRecord(record);
+    const questionSnapshot = working.currentQuestion || nextQuestion(working);
     const llm = createTextLlm(env);
     let processed;
     try {
-      processed = await processInterviewTurn(record, transcript, llm);
+      processed = await processInterviewTurn(working, transcript, llm);
     } catch (error) {
       processed = {
         facts: [],
-        nextQuestion: nextQuestion(record),
+        nextQuestion: nextQuestion(working),
         mode: "deterministic-fallback",
         warning: error instanceof Error ? error.message : "问诊模型暂时不可用"
       };
     }
-    for (const fact of processed.facts) record.facts[fact.id] = fact;
+    for (const fact of processed.facts) working.facts[fact.id] = fact;
     const committedTurn = {
       id: turnId,
       field: questionSnapshot?.field || "",
@@ -1146,29 +1168,33 @@ async function interviewTurn(request, env, caseId) {
       transcript,
       createdAt: nowIso()
     };
-    record.turns.push(committedTurn);
-    record.currentQuestion = processed.mode === "deterministic-fallback" && !processed.facts.length
-      ? nextQuestion(record)
+    working.turns.push(committedTurn);
+    working.currentQuestion = processed.mode === "deterministic-fallback" && !processed.facts.length
+      ? nextQuestion(working)
       : processed.nextQuestion;
-    record.version = expectedVersion + 1;
-    record.updatedAt = nowIso();
-    record.latestRunId = null;
-    if (!await persistCaseIfVersion(env, record, expectedVersion)) {
-      if (env.DB) await loadCase(env, caseId);
+    working.version = expectedVersion + 1;
+    working.updatedAt = nowIso();
+    working.latestRunId = null;
+    if (!await persistCaseIfVersion(env, working, expectedVersion)) {
+      const latest = env.DB
+        ? await loadCase(env, caseId)
+        : caseStore.get(caseId);
       return apiJson(request, env, {
         code: "TURN_CONFLICT",
         message: "另一轮回答已先写入，当前回答没有覆盖它；请按最新问题重试",
-        retryable: true
+        retryable: true,
+        version: latest?.version,
+        nextQuestion: latest?.currentQuestion || (latest ? nextQuestion(latest) : null)
       }, 409);
     }
-    await persistInterviewTurnAudit(env, record, committedTurn);
+    await persistInterviewTurnAudit(env, working, committedTurn);
     return apiJson(request, env, {
       turnId,
-      version: record.version,
+      version: working.version,
       extractedFacts: processed.facts,
       contradictions: processed.contradictions || [],
-      nextQuestion: record.currentQuestion,
-      complete: record.currentQuestion.complete || record.turns.length >= INTERVIEW_LIMITS.maxTurns,
+      nextQuestion: working.currentQuestion,
+      complete: working.currentQuestion.complete || working.turns.length >= INTERVIEW_LIMITS.maxTurns,
       mode: processed.mode,
       warning: processed.warning
     });
@@ -1179,13 +1205,31 @@ async function interviewTurn(request, env, caseId) {
 
 async function reviewFacts(request, env, caseId) {
   const record = await requireCase(request, env, caseId);
+  if (localTurnLocks.has(caseId)) {
+    return apiJson(request, env, {
+      code: "TURN_IN_PROGRESS",
+      message: "上一轮回答仍在处理，请等问题更新后再确认事实",
+      version: record.version,
+      facts: Object.values(record.facts)
+    }, 409);
+  }
   const body = await readJson(request);
-  const requestedVersion = Number(body.caseVersion);
-  if (Number.isFinite(requestedVersion) && requestedVersion !== record.version) {
+  const expectedVersion = Number(record.version);
+  const suppliedVersion = body.caseVersion;
+  if (suppliedVersion != null && !Number.isInteger(Number(suppliedVersion))) {
+    return apiJson(request, env, {
+      code: "CASE_VERSION_INVALID",
+      message: "案卷版本格式无效",
+      version: expectedVersion,
+      facts: Object.values(record.facts)
+    }, 422);
+  }
+  if (suppliedVersion != null && Number(suppliedVersion) !== expectedVersion) {
     return apiJson(request, env, {
       code: "CASE_VERSION_CONFLICT",
       message: "案卷已发生变化，请刷新事实后再提交",
-      version: record.version
+      version: expectedVersion,
+      facts: Object.values(record.facts)
     }, 409);
   }
   const corrections = Array.isArray(body.corrections)
@@ -1196,11 +1240,12 @@ async function reviewFacts(request, env, caseId) {
   if (!corrections.length) {
     return apiJson(request, env, { code: "NO_CORRECTIONS", message: "没有提交任何确认选项" }, 422);
   }
+  const working = cloneCaseRecord(record);
   let changed = 0;
   for (const correction of corrections) {
     const id = cleanText(correction.id, 60);
     if (!id) continue;
-    const existing = record.facts[id] || { id, field: id };
+    const existing = working.facts[id] || { id, field: id };
     const source = correction.source === "typed" ? "typed" : "choice";
     const normalized = normalizeFact({
       ...existing,
@@ -1210,27 +1255,39 @@ async function reviewFacts(request, env, caseId) {
       evidence: correction.status === "unknown" ? "U" : "B"
     }, source);
     if (normalized && !equivalentFact(existing, normalized)) {
-      record.facts[id] = normalized;
+      working.facts[id] = normalized;
       changed += 1;
     }
   }
   if (!changed) {
     return apiJson(request, env, {
       caseId,
-      version: record.version,
+      version: expectedVersion,
       unchanged: true,
       facts: Object.values(record.facts)
     });
   }
-  record.reviews.push({ corrections: changed, createdAt: nowIso() });
-  record.version += 1;
-  record.updatedAt = nowIso();
-  record.latestRunId = null;
-  await persistCase(env, record);
+  working.reviews = Array.isArray(working.reviews) ? working.reviews : [];
+  working.reviews.push({ corrections: changed, createdAt: nowIso() });
+  working.version = expectedVersion + 1;
+  working.updatedAt = nowIso();
+  working.latestRunId = null;
+  if (!await persistCaseIfVersion(env, working, expectedVersion)) {
+    const latest = env.DB
+      ? await loadCase(env, caseId)
+      : caseStore.get(caseId);
+    return apiJson(request, env, {
+      code: "CASE_VERSION_CONFLICT",
+      message: "另一份事实确认已先提交；当前修改没有覆盖它",
+      retryable: true,
+      version: latest?.version,
+      facts: Object.values(latest?.facts || {})
+    }, 409);
+  }
   return apiJson(request, env, {
     caseId,
-    version: record.version,
-    facts: Object.values(record.facts)
+    version: working.version,
+    facts: Object.values(working.facts)
   });
 }
 
@@ -1495,6 +1552,22 @@ export async function enqueueAnalysisRound(env, run, round) {
 async function startAnalysis(request, env, caseId, ctx) {
   const record = await requireCase(request, env, caseId);
   const body = await readJson(request);
+  if (body.caseVersion != null && !Number.isInteger(Number(body.caseVersion))) {
+    return apiJson(request, env, {
+      code: "CASE_VERSION_INVALID",
+      message: "案卷版本格式无效",
+      version: record.version,
+      facts: Object.values(record.facts)
+    }, 422);
+  }
+  if (body.caseVersion != null && Number(body.caseVersion) !== Number(record.version)) {
+    return apiJson(request, env, {
+      code: "CASE_VERSION_CONFLICT",
+      message: "事实档案已更新，请按最新版本重新分析",
+      version: record.version,
+      facts: Object.values(record.facts)
+    }, 409);
+  }
   const previous = await findRunForCaseVersion(env, record.id, record.version);
   if (previous?.status === "completed") {
     return apiJson(request, env, {
@@ -1746,10 +1819,57 @@ async function ttsResponse(request, env) {
 }
 
 function isWavFile(buffer) {
-  if (!(buffer instanceof ArrayBuffer) || buffer.byteLength < 44) return false;
-  const bytes = new Uint8Array(buffer, 0, Math.min(buffer.byteLength, 12));
-  return String.fromCharCode(...bytes.slice(0, 4)) === "RIFF"
-    && String.fromCharCode(...bytes.slice(8, 12)) === "WAVE";
+  if (!(buffer instanceof ArrayBuffer) || buffer.byteLength < 46) return false;
+  const bytes = new Uint8Array(buffer);
+  const view = new DataView(buffer);
+  const chunkId = (offset) => String.fromCharCode(
+    bytes[offset],
+    bytes[offset + 1],
+    bytes[offset + 2],
+    bytes[offset + 3]
+  );
+  if (chunkId(0) !== "RIFF" || chunkId(8) !== "WAVE") return false;
+  // The RIFF length must describe the complete upload; accepting a forged
+  // 12-byte prefix would let arbitrary data pass the former check.
+  if (view.getUint32(4, true) + 8 !== buffer.byteLength) return false;
+
+  let offset = 12;
+  let hasPcmFormat = false;
+  let hasAudioData = false;
+  while (offset + 8 <= buffer.byteLength) {
+    const id = chunkId(offset);
+    const size = view.getUint32(offset + 4, true);
+    const payloadOffset = offset + 8;
+    const payloadEnd = payloadOffset + size;
+    if (payloadEnd > buffer.byteLength) return false;
+
+    if (id === "fmt ") {
+      // Only canonical PCM generated by the browser is accepted. In
+      // particular, reject float/extensible WAV, stereo, resampled audio, and
+      // internally inconsistent byte-rate/block-alignment headers.
+      if (hasPcmFormat || size !== 16) return false;
+      const audioFormat = view.getUint16(payloadOffset, true);
+      const channels = view.getUint16(payloadOffset + 2, true);
+      const sampleRate = view.getUint32(payloadOffset + 4, true);
+      const byteRate = view.getUint32(payloadOffset + 8, true);
+      const blockAlign = view.getUint16(payloadOffset + 12, true);
+      const bitsPerSample = view.getUint16(payloadOffset + 14, true);
+      hasPcmFormat = audioFormat === 1
+        && channels === 1
+        && sampleRate === 16_000
+        && bitsPerSample === 16
+        && blockAlign === 2
+        && byteRate === 32_000;
+      if (!hasPcmFormat) return false;
+    } else if (id === "data") {
+      if (!hasPcmFormat || hasAudioData || size < 2 || size % 2 !== 0) return false;
+      hasAudioData = true;
+    }
+
+    // RIFF chunks are word-aligned; a declared pad byte must also be present.
+    offset = payloadEnd + (size % 2);
+  }
+  return offset === buffer.byteLength && hasPcmFormat && hasAudioData;
 }
 
 async function dashScopeAsrResponse(request, env, caseId) {

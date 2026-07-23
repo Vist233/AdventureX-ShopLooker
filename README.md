@@ -117,6 +117,14 @@ python test_location_e2e.py
 
 `test_dashscope_asr_client.mjs` 验证 DashScope 请求格式、WAV Data URI、鉴权头和两种转写响应结构；`test_worker.mjs` 验证受保护的单轮 ASR HTTP 接口。真实 StepFun 文本模型与 TTS 可用 `node test_stepfun_live.mjs` 验证；腾讯地图可用 `node test_worker_live.mjs` 验证。真实 ASR 调用应在当前 shell 或 Worker Secret 中安全提供 `DASHSCOPE_API_KEY`。不要把任何密钥写进命令历史或提交记录。
 
+真实 ASR 可分别验证供应商接口和已部署 Worker 代理：
+
+```bash
+pyenv shell Agent
+python test_dashscope_asr_live.py
+node test_production_asr.mjs
+```
+
 生产全链路验收会真实消费一次完整 Agent 分析及当日配额：
 
 ```bash

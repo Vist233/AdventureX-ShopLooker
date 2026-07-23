@@ -298,6 +298,7 @@ POST   /api/tts
 |浏览器 E2E|`python test_location_e2e.py`|位置、一次启动、降级、全量查证、一次提交和数字口径|
 |真实 StepFun 文本/TTS|`node test_stepfun_live.mjs`|真实 JSON 文本调用和 MP3 返回|
 |真实腾讯地图|`node test_worker_live.mjs`|真实地址与周边接口|
+|生产 ASR 冒烟|`node test_production_asr.mjs`|真实 Worker Secret、二进制 WAV 上传与 Fun-ASR-Flash 返回|
 |生产全链路|`python test_production_e2e.py --confirm-paid-analysis`|生产静态页、地图、TTS、事实纠偏、付费 3 方案搜索、方案执行与删除|
 
 所有 Python 命令在本工作区使用 `pyenv shell Agent`。

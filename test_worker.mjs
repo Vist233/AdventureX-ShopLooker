@@ -22,7 +22,7 @@ globalThis.fetch = async (input, init = {}) => {
   if (url.hostname === "api.stepfun.com") {
     stepfunActive += 1;
     stepfunMaxActive = Math.max(stepfunMaxActive, stepfunActive);
-    await new Promise((resolve) => setTimeout(resolve, 2));
+    await new Promise((resolve) => setTimeout(resolve, 15));
     stepfunActive -= 1;
     return Response.json({
       choices: [{ message: { content: JSON.stringify({ ok: true }) } }]
@@ -124,7 +124,7 @@ const apiRequest = (path, { method = "GET", token, body, headers = {} } = {}) =>
 );
 
 function validWavFixture() {
-  const bytes = new Uint8Array(44);
+  const bytes = new Uint8Array(46);
   const writeAscii = (offset, value) => {
     for (let index = 0; index < value.length; index += 1) {
       bytes[offset + index] = value.charCodeAt(index);
@@ -132,7 +132,7 @@ function validWavFixture() {
   };
   const view = new DataView(bytes.buffer);
   writeAscii(0, "RIFF");
-  view.setUint32(4, 36, true);
+  view.setUint32(4, 38, true);
   writeAscii(8, "WAVE");
   writeAscii(12, "fmt ");
   view.setUint32(16, 16, true);
@@ -143,8 +143,15 @@ function validWavFixture() {
   view.setUint16(32, 2, true);
   view.setUint16(34, 16, true);
   writeAscii(36, "data");
-  view.setUint32(40, 0, true);
+  view.setUint32(40, 2, true);
+  view.setInt16(44, 0, true);
   return bytes.buffer;
+}
+
+function mutateWavFixture(mutator) {
+  const wav = validWavFixture();
+  mutator(new DataView(wav), new Uint8Array(wav));
+  return wav;
 }
 
 try {
@@ -310,6 +317,48 @@ try {
   assert.equal(invalidWavResponse.status, 422);
   assert.equal((await invalidWavResponse.json()).code, "ASR_AUDIO_INVALID");
 
+  const nonPcmWavResponse = await apiRequest(`/api/cases/${created.case.id}/asr`, {
+    method: "POST",
+    token: created.caseToken,
+    headers: { "Content-Type": "audio/wav" },
+    body: mutateWavFixture((view) => view.setUint16(20, 3, true))
+  });
+  assert.equal(nonPcmWavResponse.status, 422);
+
+  const stereoWavResponse = await apiRequest(`/api/cases/${created.case.id}/asr`, {
+    method: "POST",
+    token: created.caseToken,
+    headers: { "Content-Type": "audio/wav" },
+    body: mutateWavFixture((view) => view.setUint16(22, 2, true))
+  });
+  assert.equal(stereoWavResponse.status, 422);
+
+  const wrongRateWavResponse = await apiRequest(`/api/cases/${created.case.id}/asr`, {
+    method: "POST",
+    token: created.caseToken,
+    headers: { "Content-Type": "audio/wav" },
+    body: mutateWavFixture((view) => view.setUint32(24, 44_100, true))
+  });
+  assert.equal(wrongRateWavResponse.status, 422);
+
+  const missingDataWavResponse = await apiRequest(`/api/cases/${created.case.id}/asr`, {
+    method: "POST",
+    token: created.caseToken,
+    headers: { "Content-Type": "audio/wav" },
+    body: mutateWavFixture((_view, bytes) => {
+      bytes.set(new TextEncoder().encode("JUNK"), 36);
+    })
+  });
+  assert.equal(missingDataWavResponse.status, 422);
+
+  const forgedLengthWavResponse = await apiRequest(`/api/cases/${created.case.id}/asr`, {
+    method: "POST",
+    token: created.caseToken,
+    headers: { "Content-Type": "audio/wav" },
+    body: mutateWavFixture((view) => view.setUint32(4, 36, true))
+  });
+  assert.equal(forgedLengthWavResponse.status, 422);
+
   delete env.DASHSCOPE_API_KEY;
   const missingDashScopeKeyResponse = await apiRequest(`/api/cases/${created.case.id}/asr`, {
     method: "POST",
@@ -349,11 +398,23 @@ try {
     body: {
       turnId: "turn-stale",
       transcript: "这是基于旧问题的迟到回答",
-      expectedVersion: turn.version - 1
+      caseVersion: turn.version - 1
     }
   });
   assert.equal(staleTurnResponse.status, 409);
   assert.equal((await staleTurnResponse.json()).code, "CASE_VERSION_CONFLICT");
+
+  const invalidTurnVersionResponse = await apiRequest(`/api/cases/${created.case.id}/turns`, {
+    method: "POST",
+    token: created.caseToken,
+    body: {
+      turnId: "turn-invalid-version",
+      transcript: "版本字段格式不对",
+      expectedVersion: "not-a-version"
+    }
+  });
+  assert.equal(invalidTurnVersionResponse.status, 422);
+  assert.equal((await invalidTurnVersionResponse.json()).code, "CASE_VERSION_INVALID");
 
   const reviewCorrections = [
     {
@@ -404,10 +465,30 @@ try {
   assert.equal(reviewedCash.transcript, "我不知道");
   assert.equal(reviewedCash.evidence, "U");
 
+  const staleAnalyzeResponse = await apiRequest(`/api/cases/${created.case.id}/analyze`, {
+    method: "POST",
+    token: created.caseToken,
+    body: { caseVersion: reviewed.version - 1 }
+  });
+  assert.equal(staleAnalyzeResponse.status, 409);
+  const staleAnalyze = await staleAnalyzeResponse.json();
+  assert.equal(staleAnalyze.code, "CASE_VERSION_CONFLICT");
+  assert.equal(staleAnalyze.version, reviewed.version);
+  assert.ok(Array.isArray(staleAnalyze.facts));
+
+  const invalidAnalyzeVersionResponse = await apiRequest(`/api/cases/${created.case.id}/analyze`, {
+    method: "POST",
+    token: created.caseToken,
+    body: { caseVersion: "latest" }
+  });
+  assert.equal(invalidAnalyzeVersionResponse.status, 422);
+  assert.equal((await invalidAnalyzeVersionResponse.json()).code, "CASE_VERSION_INVALID");
+
   const analyzeResponse = await apiRequest(`/api/cases/${created.case.id}/analyze`, {
     method: "POST",
     token: created.caseToken,
     body: {
+      caseVersion: reviewed.version,
       deterministicResult: {
         decision: "TEST",
         title: "先测试",
@@ -453,6 +534,7 @@ try {
     method: "POST",
     token: created.caseToken,
     body: {
+      caseVersion: reviewed.version,
       deterministicResult: {
         decision: "TEST",
         title: "不应重复调用",
@@ -465,6 +547,74 @@ try {
   const reusedAnalysis = await reusedAnalysisResponse.json();
   assert.equal(reusedAnalysis.runId, analyze.runId);
   assert.equal(reusedAnalysis.reused, true);
+
+  const casCaseResponse = await apiRequest("/api/cases", {
+    method: "POST",
+    body: { stage: "operating" }
+  });
+  const casCase = await casCaseResponse.json();
+  const casLocationResponse = await apiRequest(`/api/cases/${casCase.case.id}/location`, {
+    method: "POST",
+    token: casCase.caseToken,
+    body: {
+      confirmed: true,
+      context: { location: { address: "上海市黄浦区并发确认测试1号" } }
+    }
+  });
+  const casLocation = await casLocationResponse.json();
+  const concurrentReviews = await Promise.all([
+    apiRequest(`/api/cases/${casCase.case.id}/review`, {
+      method: "POST",
+      token: casCase.caseToken,
+      body: {
+        caseVersion: casLocation.version,
+        corrections: [{
+          id: "rent",
+          value: 10_000,
+          unit: "元",
+          period: "月",
+          status: "confirmed",
+          source: "typed",
+          transcript: "房租一个月一万"
+        }]
+      }
+    }),
+    apiRequest(`/api/cases/${casCase.case.id}/review`, {
+      method: "POST",
+      token: casCase.caseToken,
+      body: {
+        caseVersion: casLocation.version,
+        corrections: [{
+          id: "staffCount",
+          value: 5,
+          unit: "人",
+          status: "confirmed",
+          source: "typed",
+          transcript: "一共五个人"
+        }]
+      }
+    })
+  ]);
+  assert.deepEqual(
+    concurrentReviews.map((response) => response.status).sort(),
+    [200, 409]
+  );
+  const winningReviewPayload = await concurrentReviews
+    .find((response) => response.status === 200)
+    .json();
+  const rejectedReviewPayload = await concurrentReviews
+    .find((response) => response.status === 409)
+    .json();
+  assert.equal(rejectedReviewPayload.code, "CASE_VERSION_CONFLICT");
+  assert.equal(rejectedReviewPayload.version, winningReviewPayload.version);
+  assert.deepEqual(
+    rejectedReviewPayload.facts.map((fact) => fact.id).sort(),
+    winningReviewPayload.facts.map((fact) => fact.id).sort()
+  );
+  const committedConcurrentFields = ["rent", "staffCount"].filter((id) =>
+    winningReviewPayload.facts.some((fact) => fact.id === id)
+  );
+  assert.equal(committedConcurrentFields.length, 1);
 
   const ttsFallback = await apiRequest("/api/tts", {
     method: "POST",
@@ -501,7 +651,7 @@ try {
     body: { stage: "operating" }
   });
   const policyCase = await policyCaseResponse.json();
-  await apiRequest(`/api/cases/${policyCase.case.id}/location`, {
+  const policyLocationResponse = await apiRequest(`/api/cases/${policyCase.case.id}/location`, {
     method: "POST",
     token: policyCase.caseToken,
     body: {
@@ -509,27 +659,49 @@ try {
       context: { location: { address: "上海市黄浦区程序控制问题1号" } }
     }
   });
-  const concurrentTurns = await Promise.all([
+  const policyLocation = await policyLocationResponse.json();
+  const committedTurnPromise = apiRequest(`/api/cases/${policyCase.case.id}/turns`, {
+    method: "POST",
+    token: policyCase.caseToken,
+    body: {
+      turnId: "turn-policy-a",
+      transcript: "我想先止损",
+      caseVersion: policyLocation.version
+    }
+  });
+  await new Promise((resolve) => setTimeout(resolve, 2));
+  const [rejectedConcurrentTurn, rejectedConcurrentReview, committedPolicyTurn] = await Promise.all([
     apiRequest(`/api/cases/${policyCase.case.id}/turns`, {
       method: "POST",
       token: policyCase.caseToken,
-      body: { turnId: "turn-policy-a", transcript: "我想先止损" }
+      body: {
+        turnId: "turn-policy-b",
+        transcript: "我也说一句迟到回答",
+        caseVersion: policyLocation.version
+      }
     }),
-    apiRequest(`/api/cases/${policyCase.case.id}/turns`, {
+    apiRequest(`/api/cases/${policyCase.case.id}/review`, {
       method: "POST",
       token: policyCase.caseToken,
-      body: { turnId: "turn-policy-b", transcript: "我也说一句迟到回答" }
-    })
+      body: {
+        caseVersion: policyLocation.version,
+        corrections: [{
+          id: "goal",
+          value: "止损",
+          status: "confirmed",
+          source: "choice"
+        }]
+      }
+    }),
+    committedTurnPromise
   ]);
-  assert.deepEqual(
-    concurrentTurns.map((response) => response.status).sort(),
-    [200, 409]
-  );
-  const committedPolicyTurn = concurrentTurns.find((response) => response.status === 200);
+  assert.equal(committedPolicyTurn.status, 200);
   const policyPayload = await committedPolicyTurn.json();
   assert.equal(policyPayload.nextQuestion.field, "category");
-  const rejectedConcurrentTurn = concurrentTurns.find((response) => response.status === 409);
+  assert.equal(rejectedConcurrentTurn.status, 409);
   assert.equal((await rejectedConcurrentTurn.json()).code, "TURN_IN_PROGRESS");
+  assert.equal(rejectedConcurrentReview.status, 409);
+  assert.equal((await rejectedConcurrentReview.json()).code, "TURN_IN_PROGRESS");
   delete env.STEPFUN_API_KEY;
 
   const missingPlanResponse = await apiRequest(

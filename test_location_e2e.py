@@ -20,7 +20,7 @@ from playwright.sync_api import Page, Route, expect, sync_playwright
 
 ROOT = Path(__file__).resolve().parent
 ADDRESS = "上海市黄浦区南京东路300号"
-API_COUNTS = {"review": 0, "asr": 0}
+API_COUNTS = {"turns": 0, "review": 0, "asr": 0}
 
 
 class QuietHandler(SimpleHTTPRequestHandler):
@@ -109,14 +109,54 @@ def api_fixture(route: Route) -> None:
     if path.endswith("/api/tts"):
         route.fulfill(status=204, body="")
         return
+    if path.endswith("/api/cases/case_e2e/turns") and route.request.method == "POST":
+        API_COUNTS["turns"] += 1
+        payload = route.request.post_data_json
+        expected_version = 1 + API_COUNTS["turns"]
+        assert payload.get("expectedVersion") == expected_version
+        if payload.get("questionId") == "goal":
+            fact = {
+                "id": "goal", "field": "goal", "kind": "text",
+                "value": payload["transcript"], "status": "provisional",
+                "source": "voice", "evidence": "C",
+                "transcript": payload["transcript"],
+            }
+            next_question = {
+                "field": "monthlyRevenue",
+                "text": "这家店一个月大约收多少钱？",
+                "kind": "money",
+            }
+        else:
+            fact = {
+                "id": "monthlyRevenue", "field": "monthlyRevenue",
+                "kind": "money", "value": 120_000, "period": "month",
+                "status": "provisional", "source": "voice", "evidence": "C",
+                "transcript": payload["transcript"],
+            }
+            next_question = {
+                "field": "ordersDaily",
+                "text": "普通一天大约有多少单？",
+                "kind": "count",
+            }
+        fulfill_json(
+            route,
+            {
+                "version": expected_version + 1,
+                "extractedFacts": [fact],
+                "nextQuestion": next_question,
+                "complete": False,
+            },
+        )
+        return
     if path.endswith("/api/cases/case_e2e/review") and route.request.method == "POST":
         API_COUNTS["review"] += 1
         payload = route.request.post_data_json
+        assert payload.get("caseVersion") == 4
         fulfill_json(
             route,
             {
                 "caseId": "case_e2e",
-                "version": 3,
+                "version": 5,
                 "facts": payload.get("corrections", []),
             },
         )
@@ -152,6 +192,7 @@ def confirm_manual_location(page: Page) -> None:
 
 
 def test_location_and_text_fallback(browser, base_url: str) -> None:
+    API_COUNTS["turns"] = 0
     API_COUNTS["review"] = 0
     context = browser.new_context(base_url=base_url, locale="zh-CN")
     context.route("**/api/**", api_fixture)
@@ -200,7 +241,7 @@ def test_location_and_text_fallback(browser, base_url: str) -> None:
     expect(page.locator('[data-panel="review"]')).to_be_visible()
 
     rows = page.locator('[data-testid="fact-review-row"]')
-    expect(rows).to_have_count(3)
+    expect(rows).to_have_count(19)
     revenue_row = rows.filter(has_text="月营业额")
     category_row = rows.filter(has_text="经营品类")
     expect(revenue_row).to_be_visible()
@@ -222,6 +263,7 @@ def test_location_and_text_fallback(browser, base_url: str) -> None:
     assert reviewed["monthlyRevenue"]["range"] == {"min": 100_000, "max": 120_000}
     assert reviewed["monthlyRevenue"]["source"] == "typed"
     assert reviewed["monthlyRevenue"]["rawTranscript"] == "一个月十到十二万"
+    assert API_COUNTS["turns"] == 2
     expect(page.locator('[data-panel="interview"]')).to_be_hidden()
 
     page.locator("#startAnalysis").click()
@@ -269,8 +311,54 @@ def test_gps_and_number_semantics(browser, base_url: str) -> None:
     assert semantic["range"]["range"] == {"min": 100_000, "max": 120_000}
     assert semantic["yearly"]["value"] == 120_000
     assert semantic["yearly"]["period"] == "year"
+    monthly_edit = page.evaluate(
+        """() => parseEditedFact({
+          id: 'rent', label: '租金', kind: 'money', value: 120000,
+          period: 'year', status: 'confirmed'
+        }, '每月一万元')"""
+    )
+    assert monthly_edit["value"] == 10_000
+    assert monthly_edit["period"] == "month"
     if errors:
         raise AssertionError("页面产生错误：" + " | ".join(errors))
+    context.close()
+
+
+def test_mobile_review_layout(browser, base_url: str) -> None:
+    context = browser.new_context(
+        base_url=base_url,
+        locale="zh-CN",
+        viewport={"width": 390, "height": 844},
+    )
+    page = context.new_page()
+    errors = attach_error_collection(page)
+    page.goto("/", wait_until="domcontentloaded")
+    page.evaluate(
+        """() => {
+          state.stage = 'operating';
+          state.facts = [
+            { id: 'category', label: '经营品类', kind: 'text', value: '咖啡', status: 'confirmed', source: 'typed', evidence: 'B', raw: '咖啡' },
+            { id: 'monthlyRevenue', label: '月营业额', kind: 'money', value: 120000, period: 'month', status: 'confirmed', source: 'voice', evidence: 'C', raw: '一个月十二万' },
+            { id: 'cashReserve', label: '可用现金', kind: 'money', value: null, status: 'unknown', source: 'voice', evidence: 'U', raw: '' }
+          ];
+          prepareReview();
+        }"""
+    )
+    expect(page.locator('[data-testid="fact-review-row"]')).to_have_count(19)
+    expect(page.locator('[data-role="edit-text"]').first).to_have_attribute(
+        "placeholder", "点这里直接改"
+    )
+    layout = page.evaluate(
+        """() => ({
+          viewport: window.innerWidth,
+          scrollWidth: document.documentElement.scrollWidth,
+          submitVisible: document.getElementById('submitReview').getBoundingClientRect().width > 0
+        })"""
+    )
+    assert layout["scrollWidth"] <= layout["viewport"], layout
+    assert layout["submitVisible"] is True
+    if errors:
+        raise AssertionError("手机查证页产生错误：" + " | ".join(errors))
     context.close()
 
 
@@ -280,9 +368,10 @@ def main() -> None:
         try:
             test_location_and_text_fallback(browser, site.url)
             test_gps_and_number_semantics(browser, site.url)
+            test_mobile_review_layout(browser, site.url)
         finally:
             browser.close()
-    print("browser E2E: location, footfall funnel, one-start fallback, review, Top3 and number semantics passed")
+    print("browser E2E: location, footfall, fallback, full review, mobile layout, Top3 and number semantics passed")
 
 
 if __name__ == "__main__":

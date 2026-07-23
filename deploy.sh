@@ -15,6 +15,7 @@ for source_file in \
   server-decision-adapter.mjs \
   worker.mjs \
   dashscope-asr-client.js \
+  test_production_asr.mjs \
   stepfun-client.js \
   agent-orchestrator.js
 do
