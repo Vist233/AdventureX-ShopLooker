@@ -123,7 +123,7 @@ const FACT_LABELS = Object.fromEntries(
 const DEMO_CASE = {
   location: {
     source: "demo-subtitle",
-    address: "山西省运城市稷山县示例小碗菜店",
+    address: "山西省运城市稷山县城区主街",
     city: "运城市",
     district: "稷山县",
     nearbyCount: 6,
@@ -141,7 +141,7 @@ const DEMO_CASE = {
     ["staffCount", "六个长期员工，还有两个小时工。"],
     ["otherFixed", "水电气一个月大约一万。"],
     ["cashReserve", "这个没细算过。"],
-    ["debt", "我不知道，这次连麦里没有说。"],
+    ["debt", "我不知道，没有单独算过。"],
     ["channel", "堂食为主，外卖现在只能做随机搭配。"],
     ["trafficMatch", "这个没有专门数过。"],
     ["visibility", "我不知道，没有做过专门测试。"],
@@ -1122,8 +1122,8 @@ function setDemoQuestion(question, index) {
   $("currentQuestion").dataset.factId = question.id;
   $("currentQuestion").dataset.factKind = question.kind || "text";
   $("currentQuestion").dataset.factLabel = question.label || FACT_LABELS[question.id] || "事实";
-  $("questionProgress").textContent = `${index + 1} / ${DEMO_CASE.turns.length}`;
-  $("questionHint").textContent = "Demo 正在按案例字幕逐题展示问答。";
+  $("questionProgress").textContent = `第 ${index + 1} / ${DEMO_CASE.turns.length}`;
+  $("questionHint").textContent = "Demo 正在按案例逐题展示问答。";
 }
 
 async function startDemoInterview() {
@@ -1137,7 +1137,7 @@ async function startDemoInterview() {
   state.interview.mode = "demo";
   state.interview.questionIndex = -1;
   upsertFact({ id: "stage", label: "经营阶段", kind: "text", value: state.stage, status: "confirmed", source: "choice", evidence: "B" });
-  upsertFact({ id: "category", label: "经营品类", kind: "text", value: $("category").value.trim(), status: "confirmed", source: "document", evidence: "B", raw: "字幕案例：私房小碗菜" });
+  upsertFact({ id: "category", label: "经营品类", kind: "text", value: $("category").value.trim(), status: "confirmed", source: "document", evidence: "B" });
   $("previousQuestion").hidden = true;
   $("fillPresetAnswers").hidden = true;
   $("confirmAnswer").disabled = true;
@@ -1189,6 +1189,7 @@ function chineseInteger(token) {
   let section = 0;
   let total = 0;
   let current = 0;
+  let wanSeen = false;
   for (const character of token) {
     if (character in digits) {
       current = digits[character];
@@ -1197,6 +1198,7 @@ function chineseInteger(token) {
     const unit = units[character];
     if (!unit) continue;
     if (unit === 10000) {
+      wanSeen = true;
       section += current;
       total += Math.max(1, section) * unit;
       section = 0;
@@ -1206,15 +1208,23 @@ function chineseInteger(token) {
       current = 0;
     }
   }
+  // “两万七”“一万八”这类口语简写：万后面的尾数表示千。
+  if (wanSeen && section === 0 && current > 0 && current < 10 && !token.includes("零") && !token.includes("〇")) return total + current * 1000;
   return total + section + current;
 }
 
 function normalizeChineseNumbers(text) {
   const protectedArabicUnits = [];
-  const protectedText = text.replace(/\d+(?:\.\d+)?[万千百]/g, (token) => {
-    const index = protectedArabicUnits.push(token) - 1;
-    return `__ARABIC_UNIT_${index}__`;
-  });
+  const protectedText = text
+    .replace(/\d+(?:\.\d+)?[万千百]/g, (token) => {
+      const index = protectedArabicUnits.push(token) - 1;
+      return `__ARABIC_UNIT_${index}__`;
+    })
+    // “一天”“一个月”“三年”这类时间量不是金额，保留原文避免被当成数字。
+    .replace(/[零〇一二两三四五六七八九十百千万]+(?=[天日月年季周])/g, (token) => {
+      const index = protectedArabicUnits.push(token) - 1;
+      return `__ARABIC_UNIT_${index}__`;
+    });
   return protectedText
     .replace(/[零〇一二两三四五六七八九十百千万]+/g, (token) => String(chineseInteger(token)))
     .replace(/__ARABIC_UNIT_(\d+)__/g, (_, index) => protectedArabicUnits[Number(index)]);
@@ -1231,9 +1241,11 @@ function parseNumericAnswer(text, kind) {
     if (high < 1000 && low >= 1000) high *= low >= 10000 ? 10000 : 1000;
     return { range: { min: Math.min(low, high), max: Math.max(low, high) }, value: null };
   }
-  const match = normalized.match(/(\d+(?:\.\d+)?)\s*(万|千|百)?/);
-  if (!match) return { value: null, range: null };
-  let value = parseMagnitude(match[1], match[2]);
+  // 一句话里可能有多个数字（“一天四千，一个月十二万”），取量级最大的作为答案。
+  const candidates = [...normalized.matchAll(/(\d+(?:\.\d+)?)\s*(万|千|百)?/g)]
+    .map((item) => parseMagnitude(item[1], item[2]));
+  if (!candidates.length) return { value: null, range: null };
+  let value = Math.max(...candidates);
   if (kind === "rate" && /毛利/.test(normalized) && !/成本/.test(normalized)) value = 100 - value;
   return { value, range: null };
 }

@@ -320,6 +320,20 @@ def test_gps_and_number_semantics(browser, base_url: str) -> None:
     assert semantic["range"]["range"] == {"min": 100_000, "max": 120_000}
     assert semantic["yearly"]["value"] == 120_000
     assert semantic["yearly"]["period"] == "year"
+    spoken = page.evaluate(
+        """() => ({
+          monthly: parseNumericAnswer('一天大约四千，按一个月三十天大约十二万。', 'money'),
+          earn: parseNumericAnswer('我一个月挣一万块', 'money'),
+          labor: parseNumericAnswer('人工一个月一万八到一万九', 'money'),
+          rentShorthand: parseNumericAnswer('房租一年两万七，不是一个月', 'money'),
+          invest: parseNumericAnswer('一开始总共投了十三万左右。', 'money')
+        })"""
+    )
+    assert spoken["monthly"]["value"] == 120_000
+    assert spoken["earn"]["value"] == 10_000
+    assert spoken["labor"]["range"] == {"min": 18_000, "max": 19_000}
+    assert spoken["rentShorthand"]["value"] == 27_000
+    assert spoken["invest"]["value"] == 130_000
     monthly_edit = page.evaluate(
         """() => parseEditedFact({
           id: 'rent', label: '租金', kind: 'money', value: 120000,
