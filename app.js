@@ -217,6 +217,24 @@ function syncCategoryChips() {
   document.querySelectorAll("[data-category]").forEach((button) => {
     button.classList.toggle("selected", button.dataset.category === value);
   });
+  updateCategoryInputVisibility(value);
+}
+
+// "我不知道" means the user has no category yet, so the free-text input is
+// meaningless and only adds noise. Hide it in that single case; every other
+// selection (chip or typed) keeps the input visible.
+function updateCategoryInputVisibility(value) {
+  const field = document.querySelector(".category-input-field");
+  if (field) field.hidden = value === "我不知道";
+}
+
+// First-load / reset defaults for the real (non-demo) judge flow: preopen stage
+// and "我不知道" category, so a walk-in user can go straight to a map report.
+function applyDefaultJudgeSetup() {
+  if (DEMO_MODE) return;
+  chooseStage("preopen");
+  $("category").value = "我不知道";
+  syncCategoryChips();
 }
 
 function configureDemoLanding() {
@@ -2533,6 +2551,7 @@ function resetFlow() {
   $("reviewFormStatus").textContent = "所有问题都列在这里，不会再用语音重问。";
   setProductView(DEMO_MODE ? "workspace" : "landing");
   setPanel("location");
+  applyDefaultJudgeSetup();
 }
 
 document.querySelectorAll("[data-stage]").forEach((button) => {
@@ -2595,7 +2614,10 @@ document.querySelector(".brand").addEventListener("click", (event) => {
 });
 
 configureDemoLanding();
-if (!DEMO_MODE) setProductView("landing");
+if (!DEMO_MODE) {
+  setProductView("landing");
+  applyDefaultJudgeSetup();
+}
 
 fetch("data/corpus_analysis.json")
   .then((response) => response.ok ? response.json() : Promise.reject())
