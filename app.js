@@ -37,13 +37,15 @@ const state = {
     draft: "",
     draftEdited: false,
     draftSource: "",
+    voiceBase: "",
     progress: { asked: 0, coreTarget: 6, maxTurns: 12 },
     noSpeechCount: 0,
     submitInFlight: false,
     asrController: null,
     turnController: null,
     finishRequested: false,
-    pendingQuestion: null
+    pendingQuestion: null,
+    history: []
   },
   facts: [],
   transcripts: [],
@@ -52,15 +54,7 @@ const state = {
   recognition: null,
   analysisTimer: null,
   demoMode: DEMO_MODE,
-  demoPlaybackToken: 0,
-  footfall: {
-    durationSeconds: 20 * 60,
-    remainingSeconds: 20 * 60,
-    running: false,
-    endAt: null,
-    timerId: null,
-    counts: { passers: 0, targets: 0, seen: 0, entered: 0, orders: 0 }
-  }
+  demoPlaybackToken: 0
 };
 
 const QUESTION_BANK = {
@@ -190,153 +184,17 @@ function setPanel(panel) {
   });
   const titles = {
     location: "先确认店铺位置",
-    interview: "直接回答，不用再点按钮",
+    interview: "答完这几题，拿到诊断",
     review: "只改明显不对的事实",
     result: "算账、搜索，再核验"
   };
   $("flowTitle").textContent = titles[panel];
-  if ($("footfallTool")) {
-    $("footfallTool").hidden = !state.locationConfirmed || ["interview", "review"].includes(panel);
-  }
   document.querySelector(`[data-panel="${panel}"]`)?.scrollIntoView({ behavior: "smooth", block: "start" });
-}
-
-function formatClock(seconds) {
-  const safe = Math.max(0, Math.ceil(seconds));
-  return `${String(Math.floor(safe / 60)).padStart(2, "0")}:${String(safe % 60).padStart(2, "0")}`;
-}
-
-function conversionRate(numerator, denominator) {
-  if (!denominator) return null;
-  return (numerator / denominator) * 100;
-}
-
-function stopFootfallTimer() {
-  if (state.footfall.timerId) clearInterval(state.footfall.timerId);
-  state.footfall.timerId = null;
-}
-
-function storeFootfallEvidence(final = false) {
-  const labels = {
-    passers: "20分钟经过人数",
-    targets: "20分钟目标顾客人数",
-    seen: "20分钟看见门头人数",
-    entered: "20分钟进店人数",
-    orders: "20分钟下单人数"
-  };
-  Object.entries(state.footfall.counts).forEach(([field, value]) => {
-    upsertFact({
-      id: `footfall_${field}`,
-      label: labels[field],
-      kind: "count",
-      value,
-      status: final ? "confirmed" : "provisional",
-      source: "choice",
-      evidence: final ? "B" : "C",
-      period: "20m",
-      raw: "现场手动计数"
-    });
-  });
-}
-
-function renderFootfall() {
-  const { counts, remainingSeconds, running, durationSeconds } = state.footfall;
-  $("footfallClock").textContent = formatClock(remainingSeconds);
-  $("footfallTimerStatus").textContent = running
-    ? "计时中 · 点击对应阶段加 1"
-    : remainingSeconds <= 0
-      ? "本次 20 分钟观察已完成"
-      : remainingSeconds < durationSeconds ? "已暂停，可继续" : "尚未开始";
-  $("footfallStart").textContent = remainingSeconds < durationSeconds && remainingSeconds > 0 ? "继续计时" : "开始 20 分钟";
-  $("footfallStart").disabled = running || remainingSeconds <= 0;
-  $("footfallPause").disabled = !running;
-  document.querySelectorAll("[data-footfall-count]").forEach((button) => {
-    button.classList.toggle("enabled", running);
-    button.setAttribute("aria-disabled", String(!running));
-  });
-  $("footfallPassers").textContent = counts.passers;
-  $("footfallTargets").textContent = counts.targets;
-  $("footfallSeen").textContent = counts.seen;
-  $("footfallEntered").textContent = counts.entered;
-  $("footfallOrders").textContent = counts.orders;
-
-  const rates = [
-    ["目标客群 / 经过", conversionRate(counts.targets, counts.passers)],
-    ["看见 / 目标客群", conversionRate(counts.seen, counts.targets)],
-    ["进店 / 看见", conversionRate(counts.entered, counts.seen)],
-    ["下单 / 进店", conversionRate(counts.orders, counts.entered)],
-    ["总成交 / 经过", conversionRate(counts.orders, counts.passers)]
-  ];
-  $("footfallRates").innerHTML = rates.map(([label, rate]) => `
-    <article><span>${label}</span><strong>${rate == null ? "—" : `${rate.toFixed(1)}%`}</strong></article>
-  `).join("");
-  const total = Object.values(counts).reduce((sum, value) => sum + value, 0);
-  $("footfallSummaryCount").textContent = total ? `${counts.passers} 人经过 · ${counts.orders} 人下单` : "尚未计数";
-
-  if ($("footfallResultEvidence")) {
-    $("footfallResultEvidence").innerHTML = total ? `
-      <span class="section-kicker">现场五段转化证据</span>
-      <p><b>${counts.passers}</b> 人经过，<b>${counts.targets}</b> 人属于目标客群，<b>${counts.seen}</b> 人看见门头，<b>${counts.entered}</b> 人进店，<b>${counts.orders}</b> 人下单。总成交转化为 <b>${rates[4][1] == null ? "待补" : `${rates[4][1].toFixed(1)}%`}</b>。</p>
-    ` : `
-      <span class="section-kicker">现场五段转化证据</span>
-      <p>尚未进行 20 分钟现场计数。地图 POI 不能代替这项证据。</p>
-    `;
-  }
-}
-
-function tickFootfall() {
-  if (!state.footfall.running || !state.footfall.endAt) return;
-  state.footfall.remainingSeconds = Math.max(0, Math.ceil((state.footfall.endAt - Date.now()) / 1000));
-  if (state.footfall.remainingSeconds <= 0) {
-    state.footfall.running = false;
-    state.footfall.endAt = null;
-    stopFootfallTimer();
-    storeFootfallEvidence(true);
-  }
-  renderFootfall();
-}
-
-function startFootfall() {
-  if (!state.locationConfirmed || state.footfall.running || state.footfall.remainingSeconds <= 0) return;
-  state.footfall.running = true;
-  state.footfall.endAt = Date.now() + state.footfall.remainingSeconds * 1000;
-  stopFootfallTimer();
-  state.footfall.timerId = setInterval(tickFootfall, 250);
-  renderFootfall();
-}
-
-function pauseFootfall() {
-  if (!state.footfall.running) return;
-  state.footfall.remainingSeconds = Math.max(0, Math.ceil((state.footfall.endAt - Date.now()) / 1000));
-  state.footfall.running = false;
-  state.footfall.endAt = null;
-  stopFootfallTimer();
-  storeFootfallEvidence(false);
-  renderFootfall();
-}
-
-function resetFootfall() {
-  stopFootfallTimer();
-  state.footfall = {
-    durationSeconds: 20 * 60,
-    remainingSeconds: 20 * 60,
-    running: false,
-    endAt: null,
-    timerId: null,
-    counts: { passers: 0, targets: 0, seen: 0, entered: 0, orders: 0 }
-  };
-  state.facts = state.facts.filter((fact) => !String(fact.id).startsWith("footfall_"));
-  renderFootfall();
-}
-
-function incrementFootfall(field) {
-  if (!state.footfall.running || !(field in state.footfall.counts)) return;
-  state.footfall.counts[field] += 1;
-  renderFootfall();
 }
 
 function setLocationStatus(kind, message) {
   const box = $("locationStatus");
+  box.hidden = false;
   box.className = `location-status ${kind || ""}`.trim();
   box.setAttribute("role", kind === "error" ? "alert" : "status");
   box.querySelector("p").textContent = message;
@@ -409,11 +267,10 @@ function confirmLocation() {
   state.locationConfirmed = true;
   $("locationProof").hidden = false;
   $("locationProofText").textContent = state.locationCandidate.address;
+  $("locationPanel").classList.add("location-confirmed");
   $("confirmLocation").textContent = "位置已确认";
   $("confirmLocation").disabled = true;
   setLocationStatus("success", "位置已由你确认，可以开始问诊。");
-  $("footfallTool").hidden = false;
-  renderFootfall();
   upsertFact({
     id: "location",
     label: "店铺位置",
@@ -423,6 +280,15 @@ function confirmLocation() {
     source: "map",
     evidence: state.locationCandidate.source === "manual-unverified" ? "C" : "B"
   });
+  updateBeginState();
+}
+
+function editLocation() {
+  state.locationConfirmed = false;
+  $("locationProof").hidden = true;
+  $("locationPanel").classList.remove("location-confirmed");
+  $("confirmLocation").disabled = false;
+  $("confirmLocation").textContent = "这是正确位置";
   updateBeginState();
 }
 
@@ -468,7 +334,6 @@ async function fetchAddressContext(address) {
 
 async function offerLocationFallback(reason, attempt) {
   if (attempt !== state.locationAttempt) return;
-  $("manualLocationDetails").open = true;
   setLocationStatus("notice", `${reason} 请直接输入店铺地址。`);
   try {
     const data = await fetchJson("/api/map/ip-location", {}, 4000);
@@ -476,9 +341,7 @@ async function offerLocationFallback(reason, attempt) {
     const approximate = data.approximate || {};
     const label = approximate.label || [approximate.city, approximate.district].filter(Boolean).join("");
     if (!$("manualLocation").value.trim() && label) $("manualLocation").value = `${label} `;
-    $("manualLocationHint").textContent = `大致识别为 ${label || "当前城市"}。请补充商圈、路名或门牌号；大致城市不会被当成店铺位置。`;
   } catch (_) {
-    $("manualLocationHint").textContent = "请写下城市、商圈、路名或门牌号。地图不可用时仍可保留手动地址。";
   } finally {
     $("locateButton").disabled = false;
   }
@@ -908,11 +771,10 @@ async function transcribeRecordedAnswer(wavBuffer) {
     const transcript = String(data.text || "").trim();
     if (transcript.length < 2) throw new Error("没有识别到有效回答");
     state.interview.transcript = transcript;
-    if (!state.interview.draftEdited) setAnswerDraft(transcript, "voice-final");
+    setAnswerDraft(appendTranscript($("fallbackAnswer").value, transcript), "voice-final");
     $("liveTranscript").textContent = transcript;
     state.transcripts.push({ turnId: snapshot.turnId, text: transcript, question: snapshot.question });
     setListening("", "识别完成，请确认");
-    $("transcriptMode").textContent = state.interview.draftEdited ? "已保留你修改过的文字" : "云端识别已写入，可修改后确认";
   } catch (error) {
     if (
       error?.name === "AbortError"
@@ -1013,7 +875,6 @@ async function speakQuestion(text, audioUrl = null) {
   state.audio?.setSending(false);
   stopRecognition();
   setListening("", "AI 正在提问");
-  $("questionHint").textContent = "可直接说，也可以输入；确认后才会进入下一题。";
   if (!audioUrl && !state.localMode && state.caseToken) {
     try {
       const response = await fetch("/api/tts", {
@@ -1058,7 +919,6 @@ async function speakQuestion(text, audioUrl = null) {
   if (!state.interview.active || state.interview.paused) return;
   state.audio?.setSending(state.interview.mode === "dashscope-http");
   setListening("live", "正在听你说话");
-  $("questionHint").textContent = "语音会先写入输入框；你确认后才会进入下一题。";
   if (state.interview.mode === "local-speech") startRecognition();
 }
 
@@ -1068,24 +928,47 @@ function askQuestion(question, index = null) {
     return;
   }
   if (Number.isFinite(index)) state.interview.questionIndex = index;
+  state.interview.history[state.interview.questionIndex] = question;
+  $("previousQuestion").disabled = state.interview.questionIndex <= 0;
   state.interview.turnId = crypto.randomUUID ? crypto.randomUUID() : `turn-${Date.now()}`;
   state.interview.transcript = "";
   state.interview.draft = "";
   state.interview.draftEdited = false;
   state.interview.draftSource = "";
+  state.interview.voiceBase = "";
   $("fallbackAnswer").value = "";
   $("liveTranscript").textContent = "停顿后，整段识别结果会显示在这里";
   $("currentQuestion").textContent = question.text;
   $("currentQuestion").dataset.factId = question.id;
   $("currentQuestion").dataset.factKind = question.kind || "text";
   $("currentQuestion").dataset.factLabel = question.label || FACT_LABELS[question.id] || "事实";
-  const current = (state.interview.progress?.asked || state.interview.questionIndex + 1) + 1;
-  $("questionProgress").textContent = `第 ${Math.max(1, current)} / ${state.interview.progress?.coreTarget || 6} · 最多补至 ${state.interview.progress?.maxTurns || 12}`;
+  const current = Math.max(1, state.interview.questionIndex + 1);
+  $("questionProgress").textContent = `第 ${current} / ${state.interview.progress?.coreTarget || 6}-${state.interview.progress?.maxTurns || 12}`;
   void speakQuestion(question.text, question.audioUrl);
+}
+
+function goToPreviousQuestion() {
+  if (!state.interview.active || state.interview.questionIndex <= 0) return;
+  const prevIndex = state.interview.questionIndex - 1;
+  const previous = state.interview.history[prevIndex] || questionAt(prevIndex);
+  if (!previous) return;
+  state.interview.asrController?.abort();
+  state.interview.asrController = null;
+  state.interview.turnController?.abort();
+  state.interview.turnController = null;
+  state.interview.submitInFlight = false;
+  state.interview.pendingQuestion = null;
+  state.audio?.setSending(false);
+  stopRecognition();
+  if ("speechSynthesis" in window) window.speechSynthesis.cancel();
+  state.transcripts.pop();
+  if (state.interview.progress?.asked > 0) state.interview.progress.asked -= 1;
+  askQuestion(previous, prevIndex);
 }
 
 function startRecognition() {
   if (!state.recognition || !state.interview.active || state.interview.paused) return;
+  state.interview.voiceBase = $("fallbackAnswer").value;
   try { state.recognition.start(); } catch (_) { /* Already running. */ }
 }
 
@@ -1103,13 +986,13 @@ function setupSpeechRecognition() {
   recognition.interimResults = true;
   recognition.onresult = (event) => {
     let combined = "";
-    for (let i = event.resultIndex; i < event.results.length; i += 1) {
+    for (let i = 0; i < event.results.length; i += 1) {
       combined += event.results[i][0].transcript;
     }
     if (combined.trim()) {
       state.interview.transcript = combined.trim();
       $("liveTranscript").textContent = state.interview.transcript;
-      if (!state.interview.draftEdited) setAnswerDraft(state.interview.transcript, "voice-interim");
+      setAnswerDraft(appendTranscript(state.interview.voiceBase, state.interview.transcript), "voice-interim");
     }
   };
   recognition.onerror = (event) => {
@@ -1210,10 +1093,11 @@ function wait(ms) {
 }
 
 async function typeDemoText(element, text, token, delay = 18) {
-  element.textContent = "";
+  const isField = element.tagName === "TEXTAREA" || element.tagName === "INPUT";
+  if (isField) element.value = ""; else element.textContent = "";
   for (let index = 0; index < text.length; index += 1) {
     if (token !== state.demoPlaybackToken) return false;
-    element.textContent += text[index];
+    if (isField) element.value += text[index]; else element.textContent += text[index];
     await wait(delay);
   }
   return true;
@@ -1254,9 +1138,9 @@ async function startDemoInterview() {
   state.interview.questionIndex = -1;
   upsertFact({ id: "stage", label: "经营阶段", kind: "text", value: state.stage, status: "confirmed", source: "choice", evidence: "B" });
   upsertFact({ id: "category", label: "经营品类", kind: "text", value: $("category").value.trim(), status: "confirmed", source: "document", evidence: "B", raw: "字幕案例：私房小碗菜" });
-  $("textFallback").hidden = true;
-  $("pauseInterview").hidden = true;
-  if ($("finishInterview")) $("finishInterview").hidden = true;
+  $("previousQuestion").hidden = true;
+  $("fillPresetAnswers").hidden = true;
+  $("confirmAnswer").disabled = true;
   $("transcriptMode").textContent = "演示模式：答案来自已筛选字幕；不会调用 ASR 或保存案卷";
   setPanel("interview");
   for (let index = 0; index < DEMO_CASE.turns.length; index += 1) {
@@ -1267,13 +1151,14 @@ async function startDemoInterview() {
     const startedAt = Date.now();
     const prepared = { id: question[0], text: question[1], kind: question[2], label: question[3] };
     setDemoQuestion(prepared, index);
+    $("fallbackAnswer").value = "";
     setListening("", "AI 正在提问");
     const questionComplete = await typeDemoText($("currentQuestion"), prepared.text, token, DEMO_CHAR_MS);
     if (!questionComplete) return;
     speakDemoQuestion(prepared.text);
     await wait(Math.min(500, DEMO_TURN_MS * .16));
     setListening("live", "正在展示案例回答");
-    const answerComplete = await typeDemoText($("liveTranscript"), answer, token, DEMO_CHAR_MS);
+    const answerComplete = await typeDemoText($("fallbackAnswer"), answer, token, DEMO_CHAR_MS);
     if (!answerComplete) return;
     const fact = upsertFact(extractLocalFact(answer));
     state.transcripts.push({ turnId: state.interview.turnId, question: prepared.text, text: answer, factId: fact.id, source: "demo-subtitle" });
@@ -1390,11 +1275,12 @@ function extractLocalFact(text) {
   return { id, label, kind, value, status: value === "unknown" ? "unknown" : "provisional", source: "voice", evidence: "C", raw: text };
 }
 
-function handleLocalFinal(text) {
-  if (!state.interview.active || !text.trim()) return;
-  state.interview.transcript = text.trim();
-  if (!state.interview.draftEdited) setAnswerDraft(text.trim(), "voice-final");
-  setListening("", "识别完成，请确认");
+function appendTranscript(existing, addition) {
+  const head = String(existing || "").trim();
+  const tail = String(addition || "").trim();
+  if (!head) return tail;
+  if (!tail) return head;
+  return /[，。！？；、,.!?;:\s]$/.test(head) ? head + tail : `${head}，${tail}`;
 }
 
 function setAnswerDraft(text, source = "typed") {
@@ -1428,27 +1314,19 @@ async function confirmAnswerDraft() {
   await submitRemoteTurn(text, snapshot);
 }
 
-function pauseInterview() {
-  state.interview.paused = !state.interview.paused;
-  $("pauseInterview").textContent = state.interview.paused ? "继续问诊" : "暂停";
-  if (state.interview.paused) {
-    state.interview.asrController?.abort();
-    state.interview.asrController = null;
-    state.audio?.setSending(false);
-    stopRecognition();
-    setListening("paused", "已暂停");
-    if ("speechSynthesis" in window) window.speechSynthesis.cancel();
-  } else {
-    if (state.interview.pendingQuestion) {
-      const pending = state.interview.pendingQuestion;
-      state.interview.pendingQuestion = null;
-      askQuestion(pending.question, pending.index);
-      return;
-    }
-    setListening("live", "正在听你说话");
-    state.audio?.setSending(state.interview.mode === "dashscope-http");
-    if (state.interview.mode === "local-speech") startRecognition();
-  }
+function fillPresetAnswers() {
+  state.interview.active = false;
+  state.interview.paused = false;
+  state.interview.asrController?.abort();
+  state.interview.asrController = null;
+  state.interview.turnController?.abort();
+  state.interview.turnController = null;
+  state.interview.submitInFlight = false;
+  state.audio?.stop();
+  state.audio = null;
+  stopRecognition();
+  if ("speechSynthesis" in window) window.speechSynthesis.cancel();
+  void startDemoInterview();
 }
 
 function completeInterview() {
@@ -1478,7 +1356,7 @@ function finishInterview() {
 
 function reviewableFacts() {
   const excluded = new Set(["stage", "location"]);
-  return state.facts.filter((fact) => !excluded.has(fact.id) && !String(fact.id).startsWith("footfall_"));
+  return state.facts.filter((fact) => !excluded.has(fact.id));
 }
 
 function formatFact(fact) {
@@ -1699,13 +1577,6 @@ async function submitReviewForm() {
   if (!corrections) {
     $("reviewFormStatus").textContent = "有一项修改无法解析，请按红色提示处理。";
     return;
-  }
-  if (Object.values(state.footfall.counts).some((value) => value > 0)) {
-    storeFootfallEvidence(state.footfall.remainingSeconds <= 0);
-    corrections = [
-      ...corrections,
-      ...state.facts.filter((fact) => String(fact.id).startsWith("footfall_"))
-    ];
   }
   const button = $("submitReview");
   button.disabled = true;
@@ -2254,7 +2125,6 @@ function renderAnalysisResult(data) {
   $("rejectedReasons").innerHTML = rejected.length
     ? rejected.map((reason) => `<p>· ${escapeHtml(reason)}</p>`).join("")
     : "<p>候选方案因证据不足、财务不成立、不可逆或无法测量而被淘汰。</p>";
-  renderFootfall();
   void publishAnonymousCaseIfEligible();
 }
 
@@ -2316,7 +2186,6 @@ async function startSelectedPlan(planId, button) {
 
 function resetFlow() {
   clearInterval(state.analysisTimer);
-  stopFootfallTimer();
   state.interview.asrController?.abort();
   state.interview.turnController?.abort();
   state.audio?.stop();
@@ -2339,38 +2208,34 @@ function resetFlow() {
     reviewSubmitted: false,
     audio: null,
     recognition: null,
-    analysisTimer: null,
-    footfall: {
-      durationSeconds: 20 * 60,
-      remainingSeconds: 20 * 60,
-      running: false,
-      endAt: null,
-      timerId: null,
-      counts: { passers: 0, targets: 0, seen: 0, entered: 0, orders: 0 }
-    }
+    analysisTimer: null
   });
   state.interview = {
     active: false, paused: false, complete: false, questionIndex: -1,
     turnId: null, mode: "pending", transcript: "", draft: "", draftEdited: false, draftSource: "",
+    voiceBase: "",
     progress: { asked: 0, coreTarget: 6, maxTurns: 12 }, noSpeechCount: 0,
     submitInFlight: false, asrController: null, turnController: null,
-    finishRequested: false, pendingQuestion: null
+    finishRequested: false, pendingQuestion: null, history: []
   };
   document.querySelectorAll("[data-stage]").forEach((button) => button.classList.remove("selected"));
   $("category").value = "";
   $("manualLocation").value = "";
   $("mapSummary").hidden = true;
   $("locationProof").hidden = true;
-  $("manualLocationDetails").open = false;
+  $("locationStatus").hidden = true;
+  $("locationPanel").classList.remove("location-confirmed");
   $("confirmLocation").disabled = false;
   $("confirmLocation").textContent = "这是正确位置";
   $("beginInterview").disabled = true;
-  $("footfallTool").hidden = true;
-  $("footfallTool").open = false;
   $("result").hidden = true;
   $("analysisProgress").hidden = false;
-  setLocationStatus("", "请选择阶段，再取得位置");
-  renderFootfall();
+  $("fillPresetAnswers").hidden = false;
+  $("previousQuestion").hidden = false;
+  $("previousQuestion").disabled = true;
+  $("confirmAnswer").disabled = false;
+  $("submitReview").textContent = "确定提交";
+  $("reviewFormStatus").textContent = "所有问题都列在这里，不会再用语音重问。";
   setProductView(DEMO_MODE ? "workspace" : "landing");
   setPanel("location");
 }
@@ -2398,12 +2263,7 @@ $("category").addEventListener("input", syncCategoryChips);
 $("locateButton").addEventListener("click", locateCurrentStore);
 $("useManualLocation").addEventListener("click", () => void useManualLocation());
 $("confirmLocation").addEventListener("click", confirmLocation);
-$("footfallStart").addEventListener("click", startFootfall);
-$("footfallPause").addEventListener("click", pauseFootfall);
-$("footfallReset").addEventListener("click", resetFootfall);
-document.querySelectorAll("[data-footfall-count]").forEach((button) => {
-  button.addEventListener("click", () => incrementFootfall(button.dataset.footfallCount));
-});
+$("editLocation").addEventListener("click", editLocation);
 $("manualLocation").addEventListener("keydown", (event) => {
   if (event.key === "Enter") {
     event.preventDefault();
@@ -2411,7 +2271,8 @@ $("manualLocation").addEventListener("keydown", (event) => {
   }
 });
 $("beginInterview").addEventListener("click", () => void beginInterview());
-$("pauseInterview").addEventListener("click", pauseInterview);
+$("fillPresetAnswers").addEventListener("click", fillPresetAnswers);
+$("previousQuestion").addEventListener("click", goToPreviousQuestion);
 $("reviewForm").addEventListener("submit", (event) => {
   event.preventDefault();
   void submitReviewForm();
@@ -2449,7 +2310,5 @@ fetch("data/corpus_analysis.json")
   .then((response) => response.ok ? response.json() : Promise.reject())
   .then((data) => {
     $("heroTitles").textContent = data.archive.manifest_unique_videos;
-    $("heroAccepted").textContent = data.archive.accepted_transcripts;
-    $("heroExcluded").textContent = data.archive.excluded_transcripts;
   })
   .catch(() => {});

@@ -392,7 +392,7 @@ def main() -> int:
             accept="text/javascript,application/javascript",
         )
         script = bundle.body.decode("utf-8", errors="replace")
-        require("startAnalysis" in script and "footfall" in script, "deployed app bundle is incomplete")
+        require("startAnalysis" in script and "fillPresetAnswers" in script, "deployed app bundle is incomplete")
         summary["static"] = True
 
         log("[2/9] Creating a disposable case")

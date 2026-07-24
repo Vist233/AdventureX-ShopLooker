@@ -117,9 +117,9 @@ def api_fixture(route: Route) -> None:
         if payload.get("questionId") == "goal":
             fact = {
                 "id": "goal", "field": "goal", "kind": "text",
-                "value": payload["transcript"], "status": "provisional",
+                "value": payload["answer"], "status": "provisional",
                 "source": "voice", "evidence": "C",
-                "transcript": payload["transcript"],
+                "transcript": payload["answer"],
             }
             next_question = {
                 "field": "monthlyRevenue",
@@ -131,7 +131,7 @@ def api_fixture(route: Route) -> None:
                 "id": "monthlyRevenue", "field": "monthlyRevenue",
                 "kind": "money", "value": 120_000, "period": "month",
                 "status": "provisional", "source": "voice", "evidence": "C",
-                "transcript": payload["transcript"],
+                "transcript": payload["answer"],
             }
             next_question = {
                 "field": "ordersDaily",
@@ -148,15 +148,18 @@ def api_fixture(route: Route) -> None:
             },
         )
         return
+    if path.endswith("/api/cases/case_e2e/publish") and route.request.method == "POST":
+        fulfill_json(route, {"publicId": "pub_e2e", "manageToken": "manage_e2e"}, 201)
+        return
     if path.endswith("/api/cases/case_e2e/review") and route.request.method == "POST":
         API_COUNTS["review"] += 1
         payload = route.request.post_data_json
-        assert payload.get("caseVersion") == 4
+        assert payload.get("caseVersion") == 5
         fulfill_json(
             route,
             {
                 "caseId": "case_e2e",
-                "version": 5,
+                "version": 6,
                 "facts": payload.get("corrections", []),
             },
         )
@@ -182,7 +185,6 @@ def attach_error_collection(page: Page) -> list[str]:
 def confirm_manual_location(page: Page) -> None:
     page.locator('[data-stage="operating"]').click()
     page.locator("#category").fill("咖啡")
-    page.locator("#manualLocationDetails").evaluate("(node) => node.open = true")
     page.locator("#manualLocation").fill(ADDRESS)
     page.locator("#useManualLocation").click()
     expect(page.locator("#mapSummary")).to_be_visible()
@@ -222,43 +224,27 @@ def test_location_and_text_fallback(browser, base_url: str) -> None:
     enter_workspace(page)
 
     confirm_manual_location(page)
-    expect(page.locator("#footfallTool")).to_be_visible()
-    page.locator("#footfallTool").evaluate("(node) => { node.open = true; }")
-
-    # Counting must be impossible until the observer explicitly starts the
-    # 20-minute task. Once started, all five stages update independently and
-    # the conversion funnel is rendered from the observed counts.
-    expect(page.locator('[data-testid="count-passers"]')).to_have_attribute("aria-disabled", "true")
-    page.locator('[data-testid="count-passers"]').evaluate("(node) => node.click()")
-    expect(page.locator("#footfallPassers")).to_have_text("0")
-    page.locator('[data-testid="footfall-start"]').click()
-    expect(page.locator('[data-testid="count-passers"]')).to_have_attribute("aria-disabled", "false")
-    for selector, count in (
-        ('[data-testid="count-passers"]', 4),
-        ('[data-testid="count-targets"]', 3),
-        ('[data-testid="count-seen"]', 2),
-        ('[data-testid="count-entered"]', 1),
-        ('[data-testid="count-orders"]', 1),
-    ):
-        for _ in range(count):
-            page.locator(selector).click()
-    page.locator('[data-testid="footfall-pause"]').click()
-    expect(page.locator("#footfallSummaryCount")).to_have_text("4 人经过 · 1 人下单")
-    expect(page.locator('[data-testid="footfall-rates"]')).to_contain_text("75.0%")
-    expect(page.locator('[data-testid="footfall-rates"]')).to_contain_text("66.7%")
-    expect(page.locator('[data-testid="footfall-rates"]')).to_contain_text("25.0%")
 
     page.locator("#beginInterview").click()
     expect(page.locator('[data-panel="interview"]')).to_be_visible()
     expect(page.locator("#textFallback")).to_be_visible(timeout=8_000)
     expect(page.locator("#currentQuestion")).to_contain_text("最想解决")
+    expect(page.locator("#questionProgress")).to_contain_text("第 1 / 6-12")
 
     page.locator("#fallbackAnswer").fill("最近亏损，想先止损")
     page.locator("#textFallback button[type=submit]").click()
     expect(page.locator("#currentQuestion")).to_contain_text("一个月", timeout=5_000)
+    expect(page.locator("#questionProgress")).to_contain_text("第 2 / 6-12")
+    page.locator("#previousQuestion").click()
+    expect(page.locator("#currentQuestion")).to_contain_text("最想解决")
+    expect(page.locator("#questionProgress")).to_contain_text("第 1 / 6-12")
+    page.locator("#fallbackAnswer").fill("最近亏损，想先止损")
+    page.locator("#textFallback button[type=submit]").click()
+    expect(page.locator("#currentQuestion")).to_contain_text("一个月", timeout=5_000)
+    expect(page.locator("#questionProgress")).to_contain_text("第 2 / 6-12")
     page.locator("#fallbackAnswer").fill("一个月大约十二万")
     page.locator("#textFallback button[type=submit]").click()
-    page.locator("#finishInterview").click()
+    page.evaluate("() => finishInterview()")
     expect(page.locator('[data-panel="review"]')).to_be_visible()
 
     rows = page.locator('[data-testid="fact-review-row"]')
@@ -284,18 +270,16 @@ def test_location_and_text_fallback(browser, base_url: str) -> None:
     assert reviewed["monthlyRevenue"]["range"] == {"min": 100_000, "max": 120_000}
     assert reviewed["monthlyRevenue"]["source"] == "typed"
     assert reviewed["monthlyRevenue"]["rawTranscript"] == "一个月十到十二万"
-    assert API_COUNTS["turns"] == 2
+    assert API_COUNTS["turns"] == 3
     expect(page.locator('[data-panel="interview"]')).to_be_hidden()
 
     page.locator("#startAnalysis").click()
     expect(page.locator('[data-panel="result"]')).to_be_visible()
     expect(page.locator("#result")).to_be_visible(timeout=8_000)
-    expect(page.locator(".plan-card")).to_have_count(3)
+    expect(page.locator(".plan-card")).to_have_count(2)
     page.locator(".plan-detail").first.click()
     expect(page.locator("#planDetailDialog")).to_be_visible()
     expect(page.locator("#planDetailMarkdown")).to_contain_text("成功线")
-    expect(page.locator('[data-testid="footfall-result-evidence"]')).to_contain_text("4")
-    expect(page.locator('[data-testid="footfall-result-evidence"]')).to_contain_text("25.0%")
     assert API_COUNTS["review"] == 1
     if errors:
         raise AssertionError("页面产生错误：" + " | ".join(errors))
@@ -388,6 +372,26 @@ def test_mobile_review_layout(browser, base_url: str) -> None:
     context.close()
 
 
+def test_fill_preset_answers_runs_demo_flow(browser, base_url: str) -> None:
+    context = browser.new_context(base_url=base_url, locale="zh-CN")
+    context.route("**/api/**", api_fixture)
+    page = context.new_page()
+    errors = attach_error_collection(page)
+    page.goto("/?demoSpeed=40", wait_until="domcontentloaded")
+    enter_workspace(page)
+    confirm_manual_location(page)
+    page.locator("#beginInterview").click()
+    expect(page.locator('[data-panel="interview"]')).to_be_visible()
+    expect(page.locator("#questionProgress")).to_contain_text("第 1 / 6-12", timeout=8_000)
+    page.locator("#fillPresetAnswers").click()
+    expect(page.locator('[data-panel="review"]')).to_be_visible(timeout=15_000)
+    expect(page.locator("#submitReview")).to_contain_text("下一步")
+    expect(page.locator('[data-testid="fact-review-row"]')).to_have_count(19)
+    if errors:
+        raise AssertionError("页面产生错误：" + " | ".join(errors))
+    context.close()
+
+
 def test_subtitle_case_demo(browser, base_url: str) -> None:
     context = browser.new_context(base_url=base_url, locale="zh-CN")
     page = context.new_page()
@@ -409,7 +413,7 @@ def test_subtitle_case_demo(browser, base_url: str) -> None:
     page.locator("#submitReview").click()
     expect(page.locator("#result")).to_be_visible(timeout=4_000)
     expect(page.locator("#decisionTitle")).to_contain_text("座位与外卖")
-    expect(page.locator(".plan-card")).to_have_count(3)
+    expect(page.locator(".plan-card")).to_have_count(2)
     if errors:
         raise AssertionError("Demo 页面产生错误：" + " | ".join(errors))
     context.close()
@@ -423,10 +427,11 @@ def main() -> None:
             test_location_and_text_fallback(browser, site.url)
             test_gps_and_number_semantics(browser, site.url)
             test_mobile_review_layout(browser, site.url)
+            test_fill_preset_answers_runs_demo_flow(browser, site.url)
             test_subtitle_case_demo(browser, site.url)
         finally:
             browser.close()
-    print("browser E2E: location, footfall, fallback, full review, mobile layout, subtitle demo, Top3 and number semantics passed")
+    print("browser E2E: location, fallback, preset-answer fill, full review, mobile layout, subtitle demo, Top3 and number semantics passed")
 
 
 if __name__ == "__main__":
