@@ -1103,6 +1103,69 @@ try {
   assert.match(poisonRow.warning, /连续失败/);
   assert.equal(poisonRow.claim_token, null);
 
+  // Mid-round phase transitions must be persisted as they happen so polling
+  // clients watch real progress instead of a stale "queued" snapshot.
+  const phaseRunRow = {
+    id: "run_phase_sink",
+    case_id: "case_phase_sink",
+    case_version: 1,
+    status: "queued",
+    progress_json: JSON.stringify({ phase: "queued", round: 1, completed: 0, target: 2 }),
+    result_json: "null",
+    state_json: JSON.stringify({
+      context: { facts: {}, decision: "TEST", title: "测试", reason: "测试", metrics: {} },
+      searchState: { round: 0, audited: [], seen: [], rejected: [], verified: [], degradations: [], attempts: 0, target: 2 }
+    }),
+    warning: "",
+    claim_token: null,
+    claimed_round: null,
+    claim_expires_at: null,
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString()
+  };
+  const persistedPhases = [];
+  const phaseDb = {
+    prepare(sql) {
+      return {
+        bind(...values) {
+          return {
+            async first() {
+              if (sql.includes("SELECT * FROM analysis_runs")) return { ...phaseRunRow };
+              return null;
+            },
+            async run() {
+              if (sql.includes("INSERT INTO analysis_runs")) {
+                phaseRunRow.status = values[3];
+                phaseRunRow.progress_json = values[4];
+                persistedPhases.push(JSON.parse(values[4] || "{}")?.phase);
+                return { meta: { changes: 1 } };
+              }
+              if (sql.includes("SET claim_token = ?")) return { meta: { changes: 1 } };
+              if (sql.includes("SET claim_token = NULL")) return { meta: { changes: 1 } };
+              throw new Error(`unexpected phase-sink SQL: ${sql}`);
+            }
+          };
+        }
+      };
+    }
+  };
+  let phaseRunAcked = false;
+  await worker.queue({
+    messages: [{
+      body: { runId: phaseRunRow.id, round: 1 },
+      attempts: 1,
+      ack: () => { phaseRunAcked = true; },
+      retry: () => {}
+    }]
+  }, { DB: phaseDb, STEPFUN_API_KEY: "stepfun-test-key" });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(phaseRunAcked, true);
+  assert.equal(phaseRunRow.status, "completed");
+  for (const phase of ["round-start", "generate", "verify-evidence", "verify-execution", "round-complete", "completed"]) {
+    assert.ok(persistedPhases.includes(phase), `phase ${phase} should be persisted mid-run, got: ${persistedPhases.join(",")}`);
+  }
+  assert.ok(persistedPhases.indexOf("generate") < persistedPhases.lastIndexOf("completed"));
+
   let scheduledSql = "";
   let scheduledCutoff = "";
   const scheduledResult = await worker.scheduled({}, {

@@ -1397,6 +1397,26 @@ function attachPlanDetails(result) {
   });
 }
 
+// Persist mid-round phase transitions so polling clients watch real progress
+// instead of a stale "queued" snapshot until the whole round finishes.
+// Throttled to phase changes (or one write per 4s) and serialized through a
+// chain so a slower write can never overwrite a newer snapshot.
+function createRunProgressSink(env, run) {
+  let lastPhase = "";
+  let lastWriteAt = 0;
+  let chain = Promise.resolve();
+  return (progress) => {
+    run.progress = progress;
+    run.updatedAt = nowIso();
+    const phase = String(progress?.phase || "");
+    const nowMs = Date.now();
+    if (phase === lastPhase && nowMs - lastWriteAt < 4000) return;
+    lastPhase = phase;
+    lastWriteAt = nowMs;
+    chain = chain.then(() => persistRun(env, run)).catch(() => {});
+  };
+}
+
 async function runAnalysis(record, run, env, body) {
   const context = analysisContext(record, body);
   const llm = createTextLlm(env);
@@ -1406,10 +1426,7 @@ async function runAnalysis(record, run, env, body) {
       concurrency: SEARCH_CONCURRENCY,
       target: SEARCH_TARGET,
       maxAttempts: SEARCH_TARGET,
-      onProgress: (progress) => {
-        run.progress = progress;
-        run.updatedAt = nowIso();
-      }
+      onProgress: createRunProgressSink(env, run)
     });
     result.deterministic = {
       decision: context.decision,
@@ -1572,10 +1589,7 @@ export async function processAnalysisQueueMessage(message, env) {
     run.searchState = await runAgentRound(run.context, run.searchState, {
       llm,
       concurrency: SEARCH_CONCURRENCY,
-      onProgress: (progress) => {
-        run.progress = progress;
-        run.updatedAt = nowIso();
-      }
+      onProgress: createRunProgressSink(env, run)
     });
     run.updatedAt = nowIso();
     await persistRun(env, run);

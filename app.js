@@ -56,6 +56,7 @@ const state = {
   ttsAudio: null,
   ttsController: null,
   analysisTimer: null,
+  analysisFloor: 0,
   demoMode: DEMO_MODE,
   demoPlaybackToken: 0
 };
@@ -1819,7 +1820,11 @@ async function startAnalysis() {
   setPanel("result");
   $("analysisProgress").hidden = false;
   $("result").hidden = true;
-  startProgressAnimation();
+  state.analysisFloor = 0;
+  $("analysisTitle").textContent = "先按勇哥框架算账";
+  $("analysisStatus").textContent = "正在检查单位经济、现金寿命和第一断点…";
+  setAnalysisProgress(8);
+  document.querySelectorAll("#analysisSteps li").forEach((item, index) => item.classList.toggle("active", index === 0));
   const deterministicResult = deterministicAssessment();
   const payload = {
     caseVersion: state.caseVersion,
@@ -1848,10 +1853,11 @@ async function startAnalysis() {
       state.localMode = true;
     }
   }
+  // Local fallback: keep only a short anti-flash delay, no fake progress theater.
   setTimeout(() => {
     stopProgressAnimation();
     renderAnalysisResult(localAnalysis());
-  }, 4300);
+  }, 800);
 }
 
 function demoAnalysisResult() {
@@ -1909,6 +1915,7 @@ function startDemoAnalysis() {
   $("result").hidden = true;
   $("analysisTitle").textContent = "正在复核账目";
   $("analysisStatus").textContent = "正在检查单位经济、现金寿命和第一断点…";
+  state.analysisFloor = 0;
   setAnalysisProgress(16);
   const markDemoStep = (n) => document.querySelectorAll("#analysisSteps li").forEach((item, index) => item.classList.toggle("active", index <= n));
   markDemoStep(0);
@@ -1939,32 +1946,36 @@ function startDemoAnalysis() {
   setTimeout(() => renderAnalysisResult(demoAnalysisResult()), 7200);
 }
 
-function startProgressAnimation() {
-  clearInterval(state.analysisTimer);
-  let step = 0;
-  const messages = [
-    ["先按勇哥框架算账", "正在检查单位经济、现金寿命和第一断点…", 12],
-    ["正在探索不同经营杠杆", "3 条独立流水线，同时生成位置、产品、人员、渠道等候选方案…", 35],
-    ["正在淘汰讲不通的方案", "核对证据引用、替代解释、预算和停止线…", 58],
-    ["正在做财务与执行核验", "算不过账、不可逆或无法测量的方案直接淘汰…", 77],
-    ["正在合并重复机制", "不会把三种门头文案凑成三个方案…", 91]
-  ];
-  const apply = () => {
-    const [title, status, progress] = messages[Math.min(step, messages.length - 1)];
-    $("analysisTitle").textContent = title;
-    $("analysisStatus").textContent = status;
-    setAnalysisProgress(progress);
-    document.querySelectorAll("#analysisSteps li").forEach((item, index) => item.classList.toggle("active", index <= step));
-    step += 1;
-  };
-  apply();
-  state.analysisTimer = setInterval(apply, 900);
+// Real server phases drive the progress bar. No timed theater: the bar only
+// moves when the server reports a new phase or more audited candidates, and
+// it never moves backward within one analysis run.
+const ANALYSIS_PHASES = {
+  "queued": { percent: 8, step: 0 },
+  "round-start": { percent: 12, step: 0, title: "先按勇哥框架算账" },
+  "generate": { percent: 33, step: 1, title: "正在探索不同经营杠杆" },
+  "verify-evidence": { percent: 50, step: 2, title: "正在淘汰讲不通的方案" },
+  "verify-execution": { percent: 66, step: 3, title: "正在做财务与执行核验" },
+  "round-complete": { percent: 85, step: 4, title: "正在合并重复机制" },
+  "completed": { percent: 100, step: 4 }
+};
+
+function renderRunProgress(progress) {
+  const phase = ANALYSIS_PHASES[progress?.phase];
+  const completed = Number(progress?.completed) || 0;
+  const target = Number(progress?.target) || 3;
+  const ratio = Math.max(0, Math.min(1, completed / target));
+  setAnalysisProgress(Math.max(phase?.percent ?? 8, 8 + ratio * 87));
+  if (phase?.title) $("analysisTitle").textContent = phase.title;
+  if (Number.isInteger(phase?.step)) {
+    document.querySelectorAll("#analysisSteps li").forEach((item, index) => item.classList.toggle("active", index <= phase.step));
+  }
 }
 
 function setAnalysisProgress(percent) {
   const value = Math.max(0, Math.min(100, Math.round(percent)));
-  $("analysisProgressBar").style.width = `${value}%`;
-  $("analysisPercent").textContent = `${value}%`;
+  state.analysisFloor = Math.max(Number(state.analysisFloor) || 0, value);
+  $("analysisProgressBar").style.width = `${state.analysisFloor}%`;
+  $("analysisPercent").textContent = `${state.analysisFloor}%`;
 }
 
 function stopProgressAnimation() {
@@ -1982,10 +1993,7 @@ async function watchAnalysisRun(runId) {
         headers: caseHeaders({ "Accept": "application/json" })
       }, 10000);
       const progress = data.progress || {};
-      const completed = Number(progress.completed) || 0;
-      const target = Number(progress.target) || 3;
-      $("analysisProgressBar").style.width = `${Math.max(8, Math.min(98, completed / target * 100))}%`;
-      $("analysisPercent").textContent = `${Math.round(Math.max(8, Math.min(98, completed / target * 100)))}%`;
+      renderRunProgress(progress);
       if (progress.phase) $("analysisStatus").textContent = progressLabel(progress);
       if (data.status === "completed" && data.result) {
         stopProgressAnimation();
