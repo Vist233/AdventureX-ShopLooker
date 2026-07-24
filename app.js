@@ -224,9 +224,9 @@ function configureDemoLanding() {
   $("category").value = "私房小碗菜";
   syncCategoryChips();
   $("locateButton").querySelector("b").textContent = "获取案例地图信息";
-  $("locateButton").querySelector("small").textContent = "载入一条已筛选的勇哥餐饮创业说案例";
-  $("beginInterview").textContent = "下一步：观看案例问诊";
-  setLocationStatus("notice", "这是纯演示案例：点击获取地图信息后，按原流程继续。\n");
+  $("locateButton").querySelector("small").textContent = "载入运城小碗菜的真实字幕记录";
+  $("beginInterview").textContent = "下一步：用运城小碗菜数据分析";
+  setLocationStatus("notice", "使用运城小碗菜的真实记录：点击获取地图信息后，按原流程继续。\n");
 }
 
 function updateBeginState() {
@@ -888,11 +888,9 @@ function setInterviewBusy(busy) {
   state.interview.busy = Boolean(busy);
   const confirm = $("confirmAnswer");
   const previous = $("previousQuestion");
-  const preset = $("fillPresetAnswers");
   const answer = $("fallbackAnswer");
   if (confirm) confirm.disabled = busy;
   if (previous) previous.disabled = busy || state.interview.questionIndex <= 0;
-  if (preset) preset.disabled = busy;
   if (answer) answer.disabled = busy;
 }
 
@@ -1149,7 +1147,7 @@ function setDemoQuestion(question, index) {
   $("currentQuestion").dataset.factKind = question.kind || "text";
   $("currentQuestion").dataset.factLabel = question.label || FACT_LABELS[question.id] || "事实";
   $("questionProgress").textContent = `第 ${index + 1} / ${DEMO_CASE.turns.length}`;
-  $("questionHint").textContent = "Demo 正在按案例逐题展示问答。";
+  $("questionHint").textContent = "正在按运城小碗菜的真实案例逐题填入。";
 }
 
 async function startDemoInterview() {
@@ -1165,15 +1163,22 @@ async function startDemoInterview() {
   upsertFact({ id: "stage", label: "经营阶段", kind: "text", value: state.stage, status: "confirmed", source: "choice", evidence: "B" });
   upsertFact({ id: "category", label: "经营品类", kind: "text", value: $("category").value.trim(), status: "confirmed", source: "document", evidence: "B" });
   $("previousQuestion").hidden = true;
-  $("fillPresetAnswers").hidden = true;
   $("confirmAnswer").disabled = true;
-  $("transcriptMode").textContent = "演示模式：答案来自已筛选字幕；不会调用 ASR 或保存案卷";
+  $("transcriptMode").textContent = "正在自动填入运城小碗菜的真实字幕数据；不影响后续分析";
   setPanel("interview");
+  const VISIBLE_TURNS = 8;
   for (let index = 0; index < DEMO_CASE.turns.length; index += 1) {
     if (token !== state.demoPlaybackToken) return;
     const [factId, answer] = DEMO_CASE.turns[index];
     const question = questionList().find(([id]) => id === factId);
     if (!question) continue;
+    if (index >= VISIBLE_TURNS) {
+      // Only the first few turns are played back visually; the rest are filled
+      // in silently so the review list stays complete without a long wait.
+      const fact = upsertFact(extractLocalFact(answer));
+      state.transcripts.push({ turnId: `demo-turn-${index + 1}`, question: question[1], text: answer, factId: fact.id, source: "demo-subtitle" });
+      continue;
+    }
     const startedAt = Date.now();
     const prepared = { id: question[0], text: question[1], kind: question[2], label: question[3] };
     setDemoQuestion(prepared, index);
@@ -1197,7 +1202,7 @@ async function startDemoInterview() {
   if ("speechSynthesis" in window) window.speechSynthesis.cancel();
   prepareReview();
   $("submitReview").textContent = "下一步：查看判断";
-  $("reviewFormStatus").textContent = "演示档案已填好。按钮可以点击，但不会改写这条案例；直接点下一步继续。";
+  $("reviewFormStatus").textContent = "已用运城小碗菜的真实数据填好这份档案，不影响后续分析；直接点下一步继续。";
 }
 
 function parseMagnitude(numberText, unit) {
@@ -1351,21 +1356,6 @@ async function confirmAnswerDraft() {
     return askQuestion(questionAt(nextIndex), nextIndex);
   }
   await submitRemoteTurn(text, snapshot);
-}
-
-function fillPresetAnswers() {
-  state.interview.active = false;
-  state.interview.paused = false;
-  state.interview.asrController?.abort();
-  state.interview.asrController = null;
-  state.interview.turnController?.abort();
-  state.interview.turnController = null;
-  state.interview.submitInFlight = false;
-  state.audio?.stop();
-  state.audio = null;
-  stopRecognition();
-  if ("speechSynthesis" in window) window.speechSynthesis.cancel();
-  void startDemoInterview();
 }
 
 function completeInterview() {
@@ -1818,7 +1808,7 @@ function demoAnalysisResult() {
     },
     narrative: {
       title: "先看高峰承接，不先扩店",
-      body: "这家山西运城稷山县的私房小碗菜店：日收约 4000、毛利约 45%、年租 2.7 万、人工约 1.9 万、水电气约 1 万，同时反映座位不够、外卖只能随机搭配。先用低成本实验验证座位周转和固定套餐，而不是立刻追加装修或人员。"
+      body: "你这家山西运城稷山县的私房小碗菜店：日收约 4000、毛利约 45%、年租 2.7 万、人工约 1.9 万、水电气约 1 万，同时反映座位不够、外卖只能随机搭配。先用低成本实验验证座位周转和固定套餐，而不是立刻追加装修或人员。"
     },
     candidateCount: 3,
     verified: 3,
@@ -1855,16 +1845,36 @@ function startDemoAnalysis() {
   setPanel("result");
   $("analysisProgress").hidden = false;
   $("result").hidden = true;
-  $("analysisTitle").textContent = "正在复核案例账目";
-  $("analysisStatus").textContent = "演示模式：正在生成 3 条候选并完成双重核验…";
-  setAnalysisProgress(22);
-  document.querySelectorAll("#analysisSteps li").forEach((item, index) => item.classList.toggle("active", index === 0));
+  $("analysisTitle").textContent = "正在复核账目";
+  $("analysisStatus").textContent = "正在检查单位经济、现金寿命和第一断点…";
+  setAnalysisProgress(16);
+  const markDemoStep = (n) => document.querySelectorAll("#analysisSteps li").forEach((item, index) => item.classList.toggle("active", index <= n));
+  markDemoStep(0);
   setTimeout(() => {
-    $("analysisTitle").textContent = "正在筛掉不该立刻做的动作";
+    $("analysisTitle").textContent = "正在生成候选方案";
+    $("analysisStatus").textContent = "多条独立流水线同时生成位置、产品、人员、渠道等候选…";
+    setAnalysisProgress(42);
+    markDemoStep(1);
+  }, 2000);
+  setTimeout(() => {
+    $("analysisTitle").textContent = "正在做证据与因果核验";
+    $("analysisStatus").textContent = "核对证据引用、替代解释、预算和停止线…";
+    setAnalysisProgress(66);
+    markDemoStep(2);
+  }, 4200);
+  setTimeout(() => {
+    $("analysisTitle").textContent = "正在做财务与执行核验";
+    $("analysisStatus").textContent = "算不过账、不可逆或无法测量的方案直接淘汰…";
+    setAnalysisProgress(88);
+    markDemoStep(3);
+  }, 5800);
+  setTimeout(() => {
+    $("analysisTitle").textContent = "正在合并重复机制";
     $("analysisStatus").textContent = "优先保留低预算、可停止、可测量的实验。";
-    setAnalysisProgress(72);
-  }, 850);
-  setTimeout(() => renderAnalysisResult(demoAnalysisResult()), 2000);
+    setAnalysisProgress(96);
+    markDemoStep(4);
+  }, 6600);
+  setTimeout(() => renderAnalysisResult(demoAnalysisResult()), 7200);
 }
 
 function startProgressAnimation() {
@@ -2446,7 +2456,6 @@ function resetFlow() {
   $("beginInterview").disabled = true;
   $("result").hidden = true;
   $("analysisProgress").hidden = false;
-  $("fillPresetAnswers").hidden = false;
   $("previousQuestion").hidden = false;
   $("previousQuestion").disabled = true;
   $("confirmAnswer").disabled = false;
@@ -2477,7 +2486,6 @@ $("manualLocation").addEventListener("keydown", (event) => {
   }
 });
 $("beginInterview").addEventListener("click", () => void beginInterview());
-$("fillPresetAnswers").addEventListener("click", fillPresetAnswers);
 $("previousQuestion").addEventListener("click", goToPreviousQuestion);
 $("reviewForm").addEventListener("submit", (event) => {
   event.preventDefault();

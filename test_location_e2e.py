@@ -386,26 +386,6 @@ def test_mobile_review_layout(browser, base_url: str) -> None:
     context.close()
 
 
-def test_fill_preset_answers_runs_demo_flow(browser, base_url: str) -> None:
-    context = browser.new_context(base_url=base_url, locale="zh-CN")
-    context.route("**/api/**", api_fixture)
-    page = context.new_page()
-    errors = attach_error_collection(page)
-    page.goto("/?demoSpeed=40", wait_until="domcontentloaded")
-    enter_workspace(page)
-    confirm_manual_location(page)
-    page.locator("#beginInterview").click()
-    expect(page.locator('[data-panel="interview"]')).to_be_visible()
-    expect(page.locator("#questionProgress")).to_contain_text("第 1 / 6-12", timeout=8_000)
-    page.locator("#fillPresetAnswers").click()
-    expect(page.locator('[data-panel="review"]')).to_be_visible(timeout=15_000)
-    expect(page.locator("#submitReview")).to_contain_text("下一步")
-    expect(page.locator('[data-testid="fact-review-row"]')).to_have_count(19)
-    if errors:
-        raise AssertionError("页面产生错误：" + " | ".join(errors))
-    context.close()
-
-
 def test_subtitle_case_demo(browser, base_url: str) -> None:
     context = browser.new_context(base_url=base_url, locale="zh-CN")
     page = context.new_page()
@@ -425,7 +405,7 @@ def test_subtitle_case_demo(browser, base_url: str) -> None:
     first_row.locator('input[value="unknown"]').click(force=True)
     expect(first_row).to_have_attribute("data-mode", "correct")
     page.locator("#submitReview").click()
-    expect(page.locator("#result")).to_be_visible(timeout=4_000)
+    expect(page.locator("#result")).to_be_visible(timeout=10_000)
     expect(page.locator("#decisionTitle")).to_contain_text("座位与外卖")
     expect(page.locator(".plan-card")).to_have_count(2)
     if errors:
@@ -441,11 +421,10 @@ def main() -> None:
             test_location_and_text_fallback(browser, site.url)
             test_gps_and_number_semantics(browser, site.url)
             test_mobile_review_layout(browser, site.url)
-            test_fill_preset_answers_runs_demo_flow(browser, site.url)
             test_subtitle_case_demo(browser, site.url)
         finally:
             browser.close()
-    print("browser E2E: location, fallback, preset-answer fill, full review, mobile layout, subtitle demo, Top3 and number semantics passed")
+    print("browser E2E: location, fallback, full review, mobile layout, subtitle demo, Top3 and number semantics passed")
 
 
 if __name__ == "__main__":

@@ -443,6 +443,10 @@ body.demo-mode .fact-review-row.demo-tapped { animation: demoTap .28s ease-out; 
 .rejected summary { cursor: pointer; font-weight: 800; }
 .rejected p { margin-bottom: 0; color: var(--muted); line-height: 1.6; }
 .result-actions { margin-top: 25px; display: flex; justify-content: flex-end; gap: 10px; }
+.bottom-cta { padding: 44px clamp(20px, 5vw, 72px) 8px; display: flex; justify-content: center; background: var(--paper); }
+.bottom-demo-button { min-height: 54px; padding: 0 30px; display: inline-flex; align-items: center; gap: 10px; color: var(--ink); background: var(--green); border: 1px solid var(--green); border-radius: 8px; font-weight: 850; text-decoration: none; text-align: center; }
+.bottom-demo-button span { font-size: 18px; }
+.bottom-demo-button:hover { background: var(--green-dark); border-color: var(--green-dark); color: white; }
 footer { padding: 25px clamp(20px, 5vw, 72px); display: grid; grid-template-columns: 1fr auto 1fr; gap: 20px; align-items: center; background: var(--paper); color: var(--muted); font-size: 11px; }
 footer > div { display: flex; align-items: center; gap: 8px; color: var(--ink); }
 footer > span { text-align: right; }
