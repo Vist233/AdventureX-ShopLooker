@@ -197,7 +197,7 @@ try {
   assert.equal(gpsCalls.length, 3);
   assert.match(gpsCalls[0].url.pathname, /coord/);
   assert.equal(gpsCalls[0].url.searchParams.get("type"), "1");
-  assert.equal(gpsCalls[0].init.headers.Referer, "https://yongge.zhangyvjing.com/");
+  assert.equal(gpsCalls[0].init.headers.Referer, "https://shopvalidator.zhangyvjing.com/");
 
   const addressStart = upstreamCalls.length;
   const addressResponse = await request(

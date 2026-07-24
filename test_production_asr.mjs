@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 
 const baseUrl = String(
-  process.env.PRODUCTION_URL || "https://yongge.zhangyvjing.com"
+  process.env.PRODUCTION_URL || "https://shopvalidator.zhangyvjing.com"
 ).replace(/\/+$/, "");
 const sampleUrl = process.env.DASHSCOPE_ASR_SAMPLE_URL
   || "https://dashscope.oss-cn-beijing.aliyuncs.com/samples/audio/paraformer/hello_world_female2.wav";

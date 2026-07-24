@@ -2,8 +2,8 @@
 
 更新：2026-07-24（Asia/Shanghai）  
 仓库：`Vist233/AdventureX-ShopLooker`  
-生产：<https://yongge.zhangyvjing.com>  
-案例榜：<https://yongge.zhangyvjing.com/ranking>
+生产：<https://shopvalidator.zhangyvjing.com>
+案例榜：<https://shopvalidator.zhangyvjing.com/ranking>
 
 ## 当前状态
 

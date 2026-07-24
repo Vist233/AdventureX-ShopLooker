@@ -23,7 +23,7 @@ from dataclasses import dataclass
 from typing import Any, Iterable
 
 
-DEFAULT_BASE_URL = "https://yongge.zhangyvjing.com"
+DEFAULT_BASE_URL = "https://shopvalidator.zhangyvjing.com"
 MAX_JSON_BYTES = 16 * 1024 * 1024
 MAX_STATIC_BYTES = 3 * 1024 * 1024
 MAX_AUDIO_BYTES = 12 * 1024 * 1024
@@ -353,7 +353,7 @@ def parse_args() -> argparse.Namespace:
 def main() -> int:
     args = parse_args()
     client = ApiClient(args.base_url, args.request_timeout)
-    if client.hostname == "yongge.zhangyvjing.com" and not args.confirm_paid_analysis:
+    if client.hostname == "shopvalidator.zhangyvjing.com" and not args.confirm_paid_analysis:
         raise AcceptanceError(
             "production target requires --confirm-paid-analysis because the 3-plan "
             "search makes roughly 9 paid StepFun calls"

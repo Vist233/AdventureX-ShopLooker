@@ -2,9 +2,9 @@
 
 店判不是“问 AI 该不该开店”的聊天框，而是一套先确认位置、再持续问诊、最后让用户集中纠偏事实的经营决策系统。它先用确定性公式算账，再让 StepFun 文本 Agent 搜索和核验可执行方案。
 
-生产站点：<https://yongge.zhangyvjing.com>
+生产站点：<https://shopvalidator.zhangyvjing.com>
 
-纯演示站：<https://demo.yongge.zhangyvjing.com>。它复用同一套四步界面，但不会请求地图、ASR、案卷或完整 Agent 分析；案例取自已筛选字幕 `BV15vrVBwEVP`（山西运城稷山县私房小碗菜），只展示字幕明确说出的事实，未出现的信息仍标为未知。
+纯演示站：<https://demo.shopvalidator.zhangyvjing.com>。它复用同一套四步界面，但不会请求地图、ASR、案卷或完整 Agent 分析；案例取自已筛选字幕 `BV15vrVBwEVP`（山西运城稷山县私房小碗菜），只展示字幕明确说出的事实，未出现的信息仍标为未知。
 
 勇哥在“完全不知道、数据齐全、经营好、经营差”四种情况下如何判断，见 [YONGGE_DECISION_TREE.md](YONGGE_DECISION_TREE.md)。
 

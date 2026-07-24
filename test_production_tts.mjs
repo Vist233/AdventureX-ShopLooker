@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 
-const baseUrl = String(process.env.PRODUCTION_URL || "https://yongge.zhangyvjing.com").replace(/\/+$/, "");
+const baseUrl = String(process.env.PRODUCTION_URL || "https://shopvalidator.zhangyvjing.com").replace(/\/+$/, "");
 const createResponse = await fetch(`${baseUrl}/api/cases`, {
   method: "POST",
   headers: { "Content-Type": "application/json", "Origin": baseUrl },

@@ -268,7 +268,7 @@ async function tencentRequest(path, params, key) {
   const response = await fetch(url, {
     headers: {
       "Accept": "application/json",
-      "Referer": "https://yongge.zhangyvjing.com/"
+      "Referer": "https://shopvalidator.zhangyvjing.com/"
     },
     signal: AbortSignal.timeout(7000)
   });
