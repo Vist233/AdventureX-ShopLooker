@@ -35,6 +35,7 @@ node test_dashscope_tts_client.mjs
 node test_stepfun_client.mjs
 node test_agent_orchestrator.js
 node test_worker.mjs
+node test_site_report.mjs
 
 # The live ASR check uses the real paid/network API and is therefore opt-in.
 # Run with RUN_DASHSCOPE_LIVE_ASR=1 when validating credentials or the model.
