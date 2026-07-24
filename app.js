@@ -222,6 +222,33 @@ function applyStageContext(stage) {
   // sense as a shortcut for "已经营业" / "有利润，想增长", never for preopen.
   const demoLink = $("panelDemoLink");
   if (demoLink) demoLink.hidden = isPreopen;
+  // "我不知道" (and the prefilled default address) only belong to the preopen
+  // map report. An existing store must state a real category and address.
+  const unknownChip = document.querySelector('[data-category="我不知道"]');
+  if (unknownChip) unknownChip.hidden = !isPreopen;
+  if (isPreopen) {
+    if (!$("category").value.trim()) $("category").value = "我不知道";
+    if (!$("manualLocation").value.trim()) $("manualLocation").value = DEFAULT_STORE_ADDRESS;
+  } else {
+    if ($("category").value.trim() === "我不知道") $("category").value = "";
+    if ($("manualLocation").value.trim() === DEFAULT_STORE_ADDRESS) {
+      $("manualLocation").value = "";
+      clearConfirmedLocation();
+    }
+  }
+  syncCategoryChips();
+}
+
+// Reset a location that was confirmed via the preopen default address, so
+// switching to an existing-store stage forces a fresh, real location.
+function clearConfirmedLocation() {
+  state.locationConfirmed = false;
+  state.locationCandidate = null;
+  $("mapSummary").hidden = true;
+  $("locationProof").hidden = true;
+  $("locationPanel").classList.remove("location-confirmed");
+  $("confirmLocation").disabled = false;
+  $("confirmLocation").textContent = "这是正确位置";
 }
 
 function syncCategoryChips() {
@@ -241,15 +268,11 @@ function updateCategoryInputVisibility(value) {
 }
 
 // First-load / reset defaults for the real (non-demo) judge flow: preopen stage
-// and "我不知道" category, so a walk-in user can go straight to a map report.
+// with "我不知道" + the default store address, so a walk-in user can go straight
+// to a map report. chooseStage → applyStageContext applies all of it.
 function applyDefaultJudgeSetup() {
   if (DEMO_MODE) return;
   chooseStage("preopen");
-  $("category").value = "我不知道";
-  syncCategoryChips();
-  // Pre-fill the default store address so a walk-in user can look it up and
-  // click straight through; using their own location still overrides it.
-  if (!$("manualLocation").value.trim()) $("manualLocation").value = DEFAULT_STORE_ADDRESS;
 }
 
 function configureDemoLanding() {
