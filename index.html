@@ -273,6 +273,16 @@
               <button class="primary-button" id="restartButton" type="button">重新判断</button>
             </div>
           </section>
+
+          <section class="result-leaderboard" id="resultLeaderboard" hidden aria-label="其他店铺判断案例">
+            <div class="result-leaderboard-intro">
+              <span class="section-kicker">看完你自己的店，再看别人的</span>
+              <h2>别人的店，是怎么被判断的</h2>
+              <p>下面是已核验的匿名案例。点开任意一张，就是这家店完整的分析结果页——含判断依据、下一步方案与被淘汰的理由。</p>
+            </div>
+            <div class="ranking-list" id="resultRankingList" aria-live="polite"><p>正在载入案例…</p></div>
+            <a class="result-leaderboard-more" href="/ranking.html">查看完整排行榜 →</a>
+          </section>
         </section>
       </div>
     </section>
@@ -296,6 +306,11 @@
     </div>
     <p class="plan-detail-note">以下内容由 AI 基于已核验的方案展开；不改变预算、期限、成功线和停止线。</p>
     <div class="plan-markdown" id="planDetailMarkdown"></div>
+  </dialog>
+
+  <dialog class="case-detail-dialog" id="caseDetailDialog" aria-labelledby="caseDetailKicker">
+    <div class="case-detail-bar"><span class="section-kicker" id="caseDetailKicker">案例分析结果</span><button class="dialog-close" id="closeCaseDetail" type="button" aria-label="关闭案例详情">×</button></div>
+    <div class="case-detail-body" id="caseDetailBody"></div>
   </dialog>
 
   <script src="fact-store.js"></script>

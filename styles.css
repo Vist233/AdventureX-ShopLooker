@@ -154,18 +154,37 @@ body[data-product-view="landing"] .judge {
   scroll-snap-align: start;
 }
 body[data-product-view="landing"] .fact-error-section,
-body[data-product-view="landing"] .yongge-section,
-body[data-product-view="landing"] .judge {
+body[data-product-view="landing"] .yongge-section {
   display: flex;
   flex-direction: column;
   justify-content: center;
 }
+/* 探店第一步作为末页：按屏幕高度自适应铺开，避免拥挤或被吸顶栏裁切。 */
+body[data-product-view="landing"] .judge {
+  display: flex;
+  flex-direction: column;
+  justify-content: safe center;
+  padding: clamp(78px, 11vh, 120px) clamp(18px, 6vw, 90px) clamp(36px, 7vh, 88px);
+}
+body[data-product-view="landing"] .judge .flow-shell { width: 100%; }
 body[data-product-view="workspace"] [data-landing], body[data-product-view="result"] [data-landing] { display: none !important; }
 body[data-product-view="workspace"] .judge { min-height: calc(100vh - 64px); padding-top: 58px; }
 body[data-product-view="result"] .judge { max-width: 1180px; min-height: calc(100vh - 64px); margin: 0 auto; padding: 48px 24px 96px; }
 body[data-product-view="result"] .judge-heading { display: none !important; }
 body[data-product-view="result"] .flow-shell { max-width: 980px; }
 body[data-product-view="result"] .analysis-panel { padding: 0; border: 0; background: transparent; box-shadow: none; }
+/* 结果页整屏翻页：先看自己的判断，往下滑黏一下，再看别人的案例榜。 */
+html:has(body[data-product-view="result"]) { scroll-snap-type: y proximity; scroll-padding-top: 64px; }
+body[data-product-view="result"] #result { scroll-snap-align: start; }
+body[data-product-view="result"] .result-leaderboard { scroll-snap-align: start; }
+.result-leaderboard { min-height: 100vh; margin-top: 56px; padding-bottom: 64px; }
+.result-leaderboard-intro { position: sticky; top: 64px; z-index: 5; padding: 24px 0 16px; background: var(--paper); }
+.result-leaderboard-intro .section-kicker { color: var(--green-dark); }
+.result-leaderboard-intro h2 { margin: 9px 0 8px; font-size: clamp(24px, 3.4vw, 40px); letter-spacing: -.045em; }
+.result-leaderboard-intro p { max-width: 620px; margin: 0; color: var(--muted); line-height: 1.7; font-size: 13px; }
+.result-leaderboard .ranking-list { margin-top: 18px; }
+.result-leaderboard-more { display: inline-block; margin-top: 22px; color: var(--green-dark); font-weight: 800; font-size: 13px; text-decoration: none; }
+.result-leaderboard-more:hover { text-decoration: underline; }
 
 .result-fact-evidence { margin-top: 16px; padding: 23px; display: grid; grid-template-columns: 1fr; gap: 18px; background: white; border: 1px solid var(--line); border-radius: 8px; }
 .result-fact-evidence h3 { margin: 9px 0 8px; font-size: 23px; letter-spacing: -.04em; }
