@@ -1221,6 +1221,12 @@ async function interviewTurn(request, env, caseId) {
         warning: error instanceof Error ? error.message : "问诊模型暂时不可用"
       };
     }
+    // A valid numeric/text answer must not disappear merely because the model
+    // timed out or returned an empty facts array. This is still constrained to
+    // the current deterministic field and the same FactArchive normalizer.
+    if (!processed.facts?.length) {
+      processed.facts = deterministicAnswerFact(questionSnapshot?.field, transcript, working.stage, source);
+    }
     for (const fact of processed.facts) working.facts[fact.id] = fact;
     const committedTurn = {
       id: turnId,
