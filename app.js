@@ -2410,9 +2410,27 @@ function renderAnalysisResult(data) {
   $("candidateCount").textContent = isSite
     ? (data.reportType === "recommend" ? "按客群与竞争排序的 3 个方向" : "落地与验证建议")
     : (plans.length > 1 ? "主方案 + 已核验备选" : plans.length ? "主方案" : "");
-  $("planList").innerHTML = plans.length ? plans.map((plan, index) => `
+  // Site cards recommend a category (title) and must explain *why that category
+  // fits here* in the body, then keep the verification action clearly labelled.
+  // The old layout put a generic (and often identical) verification action under
+  // each heading, so heading and body looked mismatched.
+  const siteCard = (plan, index) => `
+    <article class="plan-card site-plan" data-testid="plan-${index + 1}" data-plan-id="${escapeHtml(plan.id)}">
+      <div class="plan-rank"><span>${escapeHtml(plan.bottleneck)}</span></div>
+      <h4>${escapeHtml(plan.title)}</h4>
+      <p>${escapeHtml(plan.mechanism || plan.action)}</p>
+      <div class="plan-meta">
+        <div><span>验证预算</span><b>¥${money.format(Number(plan.budgetCap) || 0)}</b></div>
+        <div><span>验证周期</span><b>${escapeHtml(plan.durationDays)} 天</b></div>
+        <div><span>观测指标</span><b>${escapeHtml(plan.metric)}</b></div>
+      </div>
+      <div class="plan-lines"><b>怎么验证：</b>${escapeHtml(plan.action)}<br><b>成功线：</b>${escapeHtml(plan.successLine)}<br><b>停止线：</b>${escapeHtml(plan.stopLine)}</div>
+      <button type="button" class="plan-detail" data-plan-index="${index}">查看落地细节</button>
+    </article>
+  `;
+  const diagnosisCard = (plan, index) => `
     <article class="plan-card" data-testid="plan-${index + 1}" data-plan-id="${escapeHtml(plan.id)}">
-      <div class="plan-rank"><span>${isSite ? escapeHtml(plan.bottleneck) : `${index === 0 ? "主方案" : "备选方案"} · ${escapeHtml(plan.bottleneck)}`}</span></div>
+      <div class="plan-rank"><span>${index === 0 ? "主方案" : "备选方案"} · ${escapeHtml(plan.bottleneck)}</span></div>
       <h4>${escapeHtml(plan.title)}</h4>
       <p>${escapeHtml(plan.action)}</p>
       <div class="plan-meta">
@@ -2423,7 +2441,8 @@ function renderAnalysisResult(data) {
       <div class="plan-lines"><b>成功线：</b>${escapeHtml(plan.successLine)}<br><b>停止线：</b>${escapeHtml(plan.stopLine)}</div>
       <button type="button" class="plan-detail" data-plan-index="${index}">查看详细方案</button>
     </article>
-  `).join("") : evidenceTasks.length ? `
+  `;
+  $("planList").innerHTML = plans.length ? plans.map((plan, index) => (isSite ? siteCard : diagnosisCard)(plan, index)).join("") : evidenceTasks.length ? `
     <p>当前没有方案通过双重核验。下面只是补证据任务，不计分、不标 TOP，也不等于经营建议。</p>
     ${evidenceTasks.map((task) => `
       <article class="plan-card evidence-task">
