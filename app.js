@@ -209,6 +209,9 @@ function chooseStage(stage) {
   document.querySelectorAll("[data-stage]").forEach((button) => {
     button.classList.toggle("selected", button.dataset.stage === stage);
   });
+  if (!DEMO_MODE) {
+    $("beginInterview").textContent = stage === "preopen" ? "下一步：生成选址报告" : "开始问诊并持续录音";
+  }
   updateBeginState();
 }
 
@@ -1192,6 +1195,10 @@ async function beginInterview() {
     void startDemoInterview();
     return;
   }
+  if (isSiteReportMode()) {
+    void startSiteReport();
+    return;
+  }
   setPanel("interview");
   state.interview.active = true;
   state.interview.paused = false;
@@ -1874,6 +1881,49 @@ function deterministicAssessment() {
       stopLine: "数据核对前不做不可逆投入"
     };
   }
+}
+
+// Preopen path: create the case, then ask the server for a one-shot map report
+// (recommend categories when "我不知道", feasibility for a chosen category).
+async function startSiteReport() {
+  setProductView("result");
+  setPanel("result");
+  $("analysisProgress").hidden = false;
+  $("result").hidden = true;
+  state.analysisFloor = 0;
+  $("analysisTitle").textContent = "正在读取周边环境";
+  $("analysisStatus").textContent = "在扫描竞品、客群与交通信号，按勇哥框架判断能不能开…";
+  setAnalysisProgress(15);
+  document.querySelectorAll("#analysisSteps li").forEach((item, index) => item.classList.toggle("active", index === 0));
+  await createCase();
+  const category = $("category").value.trim() || "我不知道";
+  setAnalysisProgress(45);
+  if (!state.localMode && state.caseId) {
+    try {
+      const data = await fetchJson(`/api/cases/${encodeURIComponent(state.caseId)}/analyze`, {
+        method: "POST",
+        headers: caseHeaders({ "Content-Type": "application/json" }),
+        body: JSON.stringify({ mode: "site-map", category })
+      }, 30000);
+      if (data.status === "complete" || data.result) {
+        stopProgressAnimation();
+        renderAnalysisResult(data.result || data);
+        return;
+      }
+      if (data.runId) {
+        watchAnalysisRun(data.runId);
+        return;
+      }
+    } catch (error) {
+      stopProgressAnimation();
+      setAnalysisProgress(100);
+      $("analysisStatus").textContent = error.message || "地图报告生成失败，请稍后重试。";
+      return;
+    }
+  }
+  stopProgressAnimation();
+  setAnalysisProgress(100);
+  $("analysisStatus").textContent = "云端未连接，无法生成地图报告，请检查网络后重试。";
 }
 
 async function startAnalysis() {

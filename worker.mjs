@@ -1427,6 +1427,205 @@ function analysisContext(record, _body) {
   };
 }
 
+// ==== 勇哥地图选址报告（preopen 直接出报告，跳过财务问诊）====
+const YONGGE_SITE_FRAMEWORK = "勇哥第一性原理选址判断：先看客群从哪来（住宅/写字楼/学校/交通/商场），再看竞争是否过度，最后看环境冲突（纯工地、拆迁、只有办公无夜间人流等要直接扣分）。地图POI只是环境证据，不等于精确客流、营业额或租金，任何结论都要标注“需现场验证”。判定口径：竞争不过度且客群清晰且无环境冲突→值得开(GO)；信号一般或混合→先低成本验证(TEST)；强竞品密集、目标客群缺失或环境明显冲突→不建议(STOP)。";
+
+function siteGeoSummary(record) {
+  const ctx = record.location?.context || {};
+  const loc = ctx.location || {};
+  const nearby = ctx.nearby || {};
+  return {
+    address: cleanText(loc.address, 100),
+    city: cleanText(loc.city, 20),
+    district: cleanText(loc.district, 20),
+    competitorKeyword: cleanText(nearby.keyword, 24),
+    competitorCount: Number(nearby.count) || (Array.isArray(nearby.places) ? nearby.places.length : 0),
+    competitors: (nearby.places || []).slice(0, 12).map((poi) => ({
+      title: cleanText(poi.title, 36),
+      category: cleanText(poi.category, 40),
+      distance: Number(poi.distance) || 0
+    })),
+    landmarks: (ctx.landmarks || []).slice(0, 8).map((poi) => ({
+      title: cleanText(poi.title, 36),
+      category: cleanText(poi.category, 40),
+      distance: Number(poi.distance) || 0
+    })),
+    environment: (ctx.environment || []).map((group) => ({
+      label: cleanText(group.label, 20),
+      count: Number(group.count) || 0,
+      nearestMeters: Number.isFinite(group.nearestMeters) ? group.nearestMeters : null,
+      samples: Array.isArray(group.samples) ? group.samples.slice(0, 3).map((s) => cleanText(s, 36)) : []
+    }))
+  };
+}
+
+function siteMetricsFromGeo(geo) {
+  const metrics = [
+    { label: "800米同类竞品", value: `${geo.competitorCount} 个`, hint: "地图口径，不代表真实客流" }
+  ];
+  const crowd = geo.environment
+    .filter((group) => group.count > 0)
+    .sort((a, b) => b.count - a.count)
+    .slice(0, 2);
+  crowd.forEach((group) => {
+    metrics.push({ label: group.label, value: `${group.count} 处`, hint: group.samples[0] || "周边环境信号" });
+  });
+  while (metrics.length < 3) metrics.push({ label: "客群信号", value: "需现场核", hint: "地图未覆盖部分需到店确认" });
+  return metrics.slice(0, 3);
+}
+
+// Rule-based site judgment used when the LLM is unavailable or returns garbage.
+function fallbackSiteReport(geo, reportType, category) {
+  const competitors = geo.competitorCount || 0;
+  const env = Object.fromEntries(geo.environment.map((group) => [group.label, group.count || 0]));
+  const hasCrowd = (env["学校/大学"] || 0) + (env["写字楼/公司"] || 0) + (env["住宅小区"] || 0) > 0;
+  let decision = "TEST";
+  if (competitors <= 8 && hasCrowd) decision = "GO";
+  else if (competitors >= 20 || !hasCrowd) decision = "STOP";
+
+  const scored = [
+    { title: "现制茶饮 / 咖啡", why: "学校与写字楼人群高频、客单适中、复购强", weight: (env["学校/大学"] || 0) * 2 + (env["写字楼/公司"] || 0) * 2 },
+    { title: "快餐 / 简餐", why: "写字楼与住宅午晚刚需、翻台快", weight: (env["写字楼/公司"] || 0) * 2 + (env["住宅小区"] || 0) },
+    { title: "小吃 / 夜宵", why: "学校与住宅夜间人流、低门槛客单", weight: (env["学校/大学"] || 0) + (env["住宅小区"] || 0) },
+    { title: "社区生鲜 / 便利", why: "住宅密集、日常刚需、抗竞争", weight: (env["住宅小区"] || 0) * 2 },
+    { title: "正餐 / 家庭餐", why: "商场与住宅聚客、适合家庭消费", weight: (env["商场/超市"] || 0) + (env["住宅小区"] || 0) }
+  ].sort((a, b) => b.weight - a.weight);
+
+  let options;
+  if (reportType === "recommend") {
+    options = scored.slice(0, 3).map((item, index) => ({
+      rank: ["A", "B", "C"][index],
+      title: item.title,
+      why: item.why,
+      action: "先到现场蹲点核对客群与竞争，再用一次低成本试卖验证需求。",
+      budgetCap: 500, durationDays: 3, metric: "试卖期有效订单与转化",
+      successLine: "试卖达到预期订单且客群与判断一致", stopLine: "试卖无人问津或客群与判断明显不符则放弃该品类"
+    }));
+  } else {
+    options = [
+      { title: `到现场核对${category || "该品类"}的客群与竞争`, why: "地图只能看密度，客流与消费力必须现场确认", action: "工作日与周末各选高峰时段，现场记录人流结构、竞品排队与客单。", budgetCap: 0, durationDays: 2, metric: "高峰人流与竞品排队", successLine: "目标客群与判断一致且竞品未过度饱和", stopLine: "现场人流与客群明显不足则不开" },
+      { title: "低成本试卖验证真实需求", why: "把“能不能开”变成一次可撤回的小实验", action: "用最小投入摆点或快闪，测试真实下单与复购意愿。", budgetCap: 800, durationDays: 3, metric: "试卖有效订单与复购", successLine: "试卖达到预设订单线", stopLine: "试卖远低于预设线则止损" }
+    ];
+  }
+
+  const headline = reportType === "recommend"
+    ? "这个位置更适合开什么"
+    : `这个位置能不能开${category || "这个品类"}`;
+  const reason = reportType === "recommend"
+    ? `周边800米约${competitors}个同类，客群信号${hasCrowd ? "较清晰" : "偏弱"}；按客群与竞争排序给出更匹配的品类，需现场验证。`
+    : `周边800米约${competitors}个同类竞品，客群信号${hasCrowd ? "较清晰" : "偏弱"}；据此给出能否开的初判，结论需现场验证。`;
+
+  return { decision, title: headline, reason, headline, diagnosis: reason, options };
+}
+
+function normalizeSiteOptions(options, reportType) {
+  const list = Array.isArray(options) ? options.slice(0, 3) : [];
+  return list.map((option, index) => ({
+    id: `site-${index + 1}`,
+    title: cleanText(option?.title, 60) || (reportType === "recommend" ? `推荐品类 ${index + 1}` : `落地步骤 ${index + 1}`),
+    score: Math.max(70, 92 - index * 5),
+    bottleneck: reportType === "recommend"
+      ? `推荐${cleanText(option?.rank, 2) || ["A", "B", "C"][index] || ""}`.trim()
+      : "落地验证",
+    action: trimText(option?.action || option?.why, 400) || "先现场核对，再低成本验证。",
+    mechanism: trimText(option?.why, 300) || "基于周边客群与竞争的环境证据。",
+    budgetCap: Number(option?.budgetCap) || 0,
+    durationDays: Number(option?.durationDays) || 3,
+    metric: cleanText(option?.metric, 60) || "现场验证指标",
+    successLine: trimText(option?.successLine, 200) || "达到预设验证线",
+    stopLine: trimText(option?.stopLine, 200) || "未达预设线即停止",
+    detail_markdown: option?.why
+      ? `**为什么是它**：${trimText(option.why, 400)}\n\n**先做什么**：${trimText(option?.action, 400) || "到现场核对客群与竞争，再低成本试卖验证。"}`
+      : undefined
+  }));
+}
+
+async function runSiteReport(record, env, body) {
+  const category = cleanText(body?.category, 30) || cleanText(record.category, 30) || "我不知道";
+  const reportType = category === "我不知道" ? "recommend" : "feasibility";
+  const geo = siteGeoSummary(record);
+  const llm = createTextLlm(env);
+
+  let core = fallbackSiteReport(geo, reportType, category);
+  if (llm) {
+    try {
+      const response = await llm([
+        {
+          role: "system",
+          content: `你是勇哥选址判断器。${YONGGE_SITE_FRAMEWORK} 只依据给定地理信息推理，禁止臆造具体人流、营业额或租金数字。reportType=recommend 时给出3个推荐品类并用 rank A>B>C 排序，每个附客群与竞争理由；reportType=feasibility 时判断给定品类能不能开，options 给出2-3条现场核对与低成本验证步骤。全中文，只返回JSON。`
+        },
+        {
+          role: "user",
+          content: JSON.stringify({
+            reportType,
+            category,
+            geo,
+            output_schema: {
+              decision: "GO|TEST|STOP",
+              title: "一句话结论",
+              reason: "为什么这样判断（基于地理客群与竞争）",
+              headline: "结果页大标题",
+              diagnosis: "120-260字解读，说明客群来源、竞争密度与环境冲突，并提示需现场验证",
+              options: [{
+                rank: "recommend用A/B/C；feasibility可省略",
+                title: "string",
+                why: "为什么（客群+竞争）",
+                action: "现场核对或低成本验证动作",
+                budgetCap: "number 元",
+                durationDays: "number 天",
+                metric: "观测指标",
+                successLine: "成功线",
+                stopLine: "停止线"
+              }]
+            }
+          })
+        }
+      ], { temperature: 0.3, maxTokens: 1600 });
+      const decision = cleanText(response?.decision, 10).toUpperCase();
+      if (["GO", "TEST", "STOP"].includes(decision) && Array.isArray(response?.options) && response.options.length) {
+        core = {
+          decision,
+          title: cleanText(response.title, 160) || core.title,
+          reason: trimText(response.reason, 500) || core.reason,
+          headline: cleanText(response.headline, 160) || core.headline,
+          diagnosis: trimText(response.diagnosis, 600) || core.diagnosis,
+          options: response.options
+        };
+      }
+    } catch (_) {
+      // Keep the deterministic fallback report on any LLM failure.
+    }
+  }
+
+  const topPlans = normalizeSiteOptions(core.options, reportType);
+  const siteMetrics = siteMetricsFromGeo(geo);
+  const decisionLabel = { GO: "值得开", TEST: "先小成本验证", STOP: "不建议开" }[core.decision] || "先小成本验证";
+  return {
+    reportMode: "site-map",
+    reportType,
+    category,
+    deterministic: {
+      decision: core.decision,
+      title: core.title,
+      reason: core.reason,
+      metrics: {}
+    },
+    siteMetrics,
+    geo: { competitorCount: geo.competitorCount, competitorKeyword: geo.competitorKeyword, environment: geo.environment },
+    narrative: { title: core.headline, body: core.diagnosis },
+    explanation: {
+      headline: core.headline,
+      diagnosis: core.diagnosis,
+      whyThesePlans: topPlans.map((plan) => `${plan.bottleneck}：${plan.mechanism}`),
+      caution: `${decisionLabel}——地图只提供环境证据，正式投入前必须现场核对客群与竞争。`
+    },
+    topPlans,
+    candidateCount: topPlans.length,
+    verified: topPlans.length,
+    rejectedReasons: []
+  };
+}
+
 function attachPlanDetails(result) {
   const details = Array.isArray(result?.explanation?.planDetails)
     ? result.explanation.planDetails
@@ -1702,6 +1901,22 @@ export async function enqueueAnalysisRound(env, run, round) {
 async function startAnalysis(request, env, caseId, ctx) {
   const record = await requireCase(request, env, caseId);
   const body = await readJson(request);
+  // Preopen site-report mode skips the financial interview entirely and returns
+  // a map-driven "can I open here" report in one synchronous LLM pass.
+  if (body.mode === "site-map") {
+    const budget = await consumeDailyAnalysisBudget(request, env);
+    if (!budget.allowed) {
+      return apiJson(request, env, {
+        code: budget.reason === "global" ? "ANALYSIS_DAILY_BUDGET_EXHAUSTED" : "ANALYSIS_DAILY_IP_LIMIT",
+        message: budget.reason === "global"
+          ? "今日全站分析预算已用完，请明天再试"
+          : `每个网络地址每天最多新建${budget.ipLimit || DEFAULT_DAILY_IP_ANALYSIS_BUDGET}次完整分析`,
+        retryAfterMs: budget.retryAfterMs
+      }, 429);
+    }
+    const result = await runSiteReport(record, env, body);
+    return apiJson(request, env, { status: "complete", result });
+  }
   if (body.caseVersion != null && !Number.isInteger(Number(body.caseVersion))) {
     return apiJson(request, env, {
       code: "CASE_VERSION_INVALID",
