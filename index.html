@@ -95,19 +95,6 @@
       </div>
     </section>
 
-    <section class="landing-section method-section" data-landing>
-      <div class="landing-section-heading">
-        <span class="section-kicker">勇哥判店怎么做</span>
-        <h2>说清楚 → 认清楚 → 算清楚 → 试清楚</h2>
-      </div>
-      <div class="method-lanes">
-        <article><b>01</b><h3>说出来</h3><p>不用填写复杂经营表格，持续语音回答问题。</p></article>
-        <article><b>02</b><h3>确认事实</h3><p>金额、周期、比例、未知项全部通过选择题纠正。</p></article>
-        <article><b>03</b><h3>程序算账</h3><p>保本营业额、真实成本、现金寿命由确定性程序计算。</p></article>
-        <article><b>04</b><h3>做一个实验</h3><p>最多留下三个有预算、期限、指标、成功线和停止线的行动。</p></article>
-      </div>
-    </section>
-
     <section class="judge" id="judge">
       <div class="judge-heading">
         <div>
@@ -246,7 +233,8 @@
 
         <section class="flow-card flow-panel analysis-panel" id="analysisPanel" data-panel="result" hidden data-testid="analysis-step">
           <div id="analysisProgress" data-testid="analysis-progress">
-            <span class="brand-mark analysis-mark" aria-hidden="true">判</span>
+            <video class="analysis-loading" src="loading.mp4" autoplay loop muted playsinline aria-hidden="true"></video>
+            <b id="analysisPercent">0%</b>
             <span class="section-kicker">正在后台分析</span>
             <h3 id="analysisTitle">先按勇哥框架算账</h3>
             <p id="analysisStatus">正在检查单位经济、现金寿命和第一断点…</p>
@@ -262,7 +250,7 @@
 
           <section class="result-shell" id="result" hidden aria-live="polite" data-testid="result">
             <div class="result-main">
-              <div><span id="decisionCode">小步验证</span><small id="confidenceLabel">证据完整度 —</small></div>
+              <div><span id="decisionCode">小步验证</span></div>
               <h2 id="decisionTitle">—</h2>
               <p id="decisionReason">—</p>
             </div>
@@ -278,7 +266,7 @@
               <div class="result-fact-list" id="resultFactList"></div>
             </details>
             <div class="plans-heading">
-              <div><span class="section-kicker">已通过核验</span><h3>下一步方案</h3></div>
+              <div><h3>下一步方案</h3></div>
               <span id="candidateCount"></span>
             </div>
             <div class="plan-list" id="planList" data-testid="top-plans"></div>
@@ -287,8 +275,7 @@
               <div id="rejectedReasons"></div>
             </details>
             <div class="result-actions">
-              <button class="secondary-button" id="restartButton" type="button">重新判断</button>
-              <button class="primary-button" id="loadDemoButton" type="button">运行完整演示</button>
+              <button class="primary-button" id="restartButton" type="button">重新判断</button>
             </div>
           </section>
         </section>
@@ -313,7 +300,7 @@
       <button class="dialog-close" id="closePlanDetail" type="button" aria-label="关闭详细方案">×</button>
     </div>
     <p class="plan-detail-note">以下内容由 AI 基于已核验的方案展开；不改变预算、期限、成功线和停止线。</p>
-    <pre class="plan-markdown" id="planDetailMarkdown"></pre>
+    <div class="plan-markdown" id="planDetailMarkdown"></div>
   </dialog>
 
   <script src="fact-store.js"></script>

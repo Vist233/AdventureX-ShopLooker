@@ -225,7 +225,6 @@ function configureDemoLanding() {
   $("locateButton").querySelector("b").textContent = "获取案例地图信息";
   $("locateButton").querySelector("small").textContent = "载入一条已筛选的勇哥餐饮创业说案例";
   $("beginInterview").textContent = "下一步：观看案例问诊";
-  $("loadDemoButton").textContent = "重新观看完整演示";
   setLocationStatus("notice", "这是纯演示案例：点击获取地图信息后，按原流程继续。\n");
 }
 
@@ -1779,7 +1778,7 @@ function demoAnalysisResult() {
     deterministic: {
       decision: "TEST",
       title: "先把座位与外卖做成可测的小实验",
-      reason: "案例中的日营业额、毛利、房租、人工和水电已能说明门店有经营余量；但订单、客单、复购和老板劳动仍未知，不能把“生意不错”直接当成可以盲目扩张。",
+      reason: "你的日营业额、毛利、房租、人工和水电已能说明门店有经营余量；但订单、客单、复购和老板劳动仍未知，不能把“生意不错”直接当成可以盲目扩张。",
       metrics: {
         completeness: 63,
         breakEvenDaily: 2_350,
@@ -1789,8 +1788,8 @@ function demoAnalysisResult() {
       }
     },
     narrative: {
-      title: "勇哥式判断：先看高峰承接，不先扩店",
-      body: "这条案例来自山西运城稷山县的私房小碗菜店。字幕中店主说日收约 4000、毛利约 45%、年租 2.7 万、人工约 1.8—1.9 万、水电气约 1 万，同时反映座位不够、外卖只能随机搭配。先用低成本实验验证座位周转和固定套餐，而不是立刻追加装修或人员。"
+      title: "先看高峰承接，不先扩店",
+      body: "这家山西运城稷山县的私房小碗菜店：日收约 4000、毛利约 45%、年租 2.7 万、人工约 1.8—1.9 万、水电气约 1 万，同时反映座位不够、外卖只能随机搭配。先用低成本实验验证座位周转和固定套餐，而不是立刻追加装修或人员。"
     },
     candidateCount: 3,
     verified: 3,
@@ -1829,12 +1828,12 @@ function startDemoAnalysis() {
   $("result").hidden = true;
   $("analysisTitle").textContent = "正在复核案例账目";
   $("analysisStatus").textContent = "演示模式：正在生成 3 条候选并完成双重核验…";
-  $("analysisProgressBar").style.width = "22%";
+  setAnalysisProgress(22);
   document.querySelectorAll("#analysisSteps li").forEach((item, index) => item.classList.toggle("active", index === 0));
   setTimeout(() => {
     $("analysisTitle").textContent = "正在筛掉不该立刻做的动作";
     $("analysisStatus").textContent = "优先保留低预算、可停止、可测量的实验。";
-    $("analysisProgressBar").style.width = "72%";
+    setAnalysisProgress(72);
   }, 850);
   setTimeout(() => renderAnalysisResult(demoAnalysisResult()), 2000);
 }
@@ -1853,7 +1852,7 @@ function startProgressAnimation() {
     const [title, status, progress] = messages[Math.min(step, messages.length - 1)];
     $("analysisTitle").textContent = title;
     $("analysisStatus").textContent = status;
-    $("analysisProgressBar").style.width = `${progress}%`;
+    setAnalysisProgress(progress);
     document.querySelectorAll("#analysisSteps li").forEach((item, index) => item.classList.toggle("active", index <= step));
     step += 1;
   };
@@ -1861,10 +1860,16 @@ function startProgressAnimation() {
   state.analysisTimer = setInterval(apply, 900);
 }
 
+function setAnalysisProgress(percent) {
+  const value = Math.max(0, Math.min(100, Math.round(percent)));
+  $("analysisProgressBar").style.width = `${value}%`;
+  $("analysisPercent").textContent = `${value}%`;
+}
+
 function stopProgressAnimation() {
   clearInterval(state.analysisTimer);
   state.analysisTimer = null;
-  $("analysisProgressBar").style.width = "100%";
+  setAnalysisProgress(100);
 }
 
 async function watchAnalysisRun(runId) {
@@ -1879,6 +1884,7 @@ async function watchAnalysisRun(runId) {
       const completed = Number(progress.completed) || 0;
       const target = Number(progress.target) || 3;
       $("analysisProgressBar").style.width = `${Math.max(8, Math.min(98, completed / target * 100))}%`;
+      $("analysisPercent").textContent = `${Math.round(Math.max(8, Math.min(98, completed / target * 100)))}%`;
       if (progress.phase) $("analysisStatus").textContent = progressLabel(progress);
       if (data.status === "completed" && data.result) {
         stopProgressAnimation();
@@ -2048,9 +2054,44 @@ ${risks}
 ${plan.falsification}`;
 }
 
+function renderMarkdown(source) {
+  const escape = (text) => text.replace(/[&<>]/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[char]));
+  const inline = (text) => escape(text)
+    .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")
+    .replace(/`(.+?)`/g, "<code>$1</code>");
+  const lines = String(source || "").split("\n");
+  const html = [];
+  let listType = null;
+  const closeList = () => { if (listType) { html.push(`</${listType}>`); listType = null; } };
+  for (const raw of lines) {
+    const line = raw.trimEnd();
+    const heading = line.match(/^(#{1,3})\s+(.*)$/);
+    const ordered = line.match(/^\d+\.\s+(.*)$/);
+    const unordered = line.match(/^[-*]\s+(.*)$/);
+    if (heading) {
+      closeList();
+      const level = heading[1].length;
+      html.push(`<h${level}>${inline(heading[2])}</h${level}>`);
+    } else if (unordered) {
+      if (listType !== "ul") { closeList(); html.push("<ul>"); listType = "ul"; }
+      html.push(`<li>${inline(unordered[1])}</li>`);
+    } else if (ordered) {
+      if (listType !== "ol") { closeList(); html.push("<ol>"); listType = "ol"; }
+      html.push(`<li>${inline(ordered[1])}</li>`);
+    } else if (line) {
+      closeList();
+      html.push(`<p>${inline(line)}</p>`);
+    } else {
+      closeList();
+    }
+  }
+  closeList();
+  return html.join("");
+}
+
 function openPlanDetail(plan) {
   $("planDetailTitle").textContent = plan.title;
-  $("planDetailMarkdown").textContent = planMarkdown(plan);
+  $("planDetailMarkdown").innerHTML = renderMarkdown(planMarkdown(plan));
   const dialog = $("planDetailDialog");
   if (typeof dialog.showModal === "function") dialog.showModal();
   else dialog.setAttribute("open", "");
@@ -2080,7 +2121,6 @@ function renderAnalysisResult(data) {
   const metrics = assessment.metrics || {};
   const decisionLabels = { GO: "可以继续", TEST: "小步验证", STOP: "停止追加", EXIT: "准备退出", EVIDENCE: "小步验证" };
   $("decisionCode").textContent = decisionLabels[assessment.decision] || "小步验证";
-  $("confidenceLabel").textContent = `证据完整度 ${Number.isFinite(metrics.completeness) ? `${metrics.completeness}%` : "待补"}`;
   $("decisionTitle").textContent = assessment.title || "先补证据，再做决定";
   $("decisionReason").textContent = assessment.reason || "系统没有获得足够证据形成精确经营结论。";
 
@@ -2252,16 +2292,6 @@ function resetFlow() {
   setPanel("location");
 }
 
-function loadDemo() {
-  if (!DEMO_MODE) {
-    window.location.assign(DEMO_ORIGIN);
-    return;
-  }
-  state.demoPlaybackToken += 1;
-  resetFlow();
-  configureDemoLanding();
-}
-
 document.querySelectorAll("[data-stage]").forEach((button) => {
   button.addEventListener("click", () => chooseStage(button.dataset.stage));
 });
@@ -2300,7 +2330,6 @@ $("fallbackAnswer").addEventListener("input", () => {
 });
 $("startAnalysis").addEventListener("click", () => void startAnalysis());
 $("restartButton").addEventListener("click", resetFlow);
-$("loadDemoButton").addEventListener("click", loadDemo);
 $("closePlanDetail").addEventListener("click", () => $("planDetailDialog").close());
 $("planDetailDialog").addEventListener("click", (event) => {
   if (event.target === $("planDetailDialog")) $("planDetailDialog").close();
