@@ -1904,7 +1904,7 @@ async function startSiteReport() {
         method: "POST",
         headers: caseHeaders({ "Content-Type": "application/json" }),
         body: JSON.stringify({ mode: "site-map", category })
-      }, 30000);
+      }, 40000);
       if (data.status === "complete" || data.result) {
         stopProgressAnimation();
         renderAnalysisResult(data.result || data);

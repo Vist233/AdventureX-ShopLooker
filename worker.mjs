@@ -1549,7 +1549,10 @@ export async function runSiteReport(record, env, body) {
   let core = fallbackSiteReport(geo, reportType, category);
   if (llm) {
     try {
-      const response = await llm([
+      // Keep the on-site experience snappy: if the model is slow, fall back to
+      // the deterministic geo report instead of hanging past the client timeout.
+      const llmTimeout = new Promise((_, reject) => setTimeout(() => reject(new Error("site-report-llm-timeout")), 22000));
+      const response = await Promise.race([llm([
         {
           role: "system",
           content: `你是勇哥选址判断器。${YONGGE_SITE_FRAMEWORK} 只依据给定地理信息推理，禁止臆造具体人流、营业额或租金数字。reportType=recommend 时给出3个推荐品类并用 rank A>B>C 排序，每个附客群与竞争理由；reportType=feasibility 时判断给定品类能不能开，options 给出2-3条现场核对与低成本验证步骤。全中文，只返回JSON。`
@@ -1580,7 +1583,7 @@ export async function runSiteReport(record, env, body) {
             }
           })
         }
-      ], { temperature: 0.3, maxTokens: 1600 });
+      ], { temperature: 0.3, maxTokens: 1600 }), llmTimeout]);
       const decision = cleanText(response?.decision, 10).toUpperCase();
       if (["GO", "TEST", "STOP"].includes(decision) && Array.isArray(response?.options) && response.options.length) {
         core = {
