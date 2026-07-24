@@ -1475,7 +1475,7 @@ function siteMetricsFromGeo(geo) {
 }
 
 // Rule-based site judgment used when the LLM is unavailable or returns garbage.
-function fallbackSiteReport(geo, reportType, category) {
+export function fallbackSiteReport(geo, reportType, category) {
   const competitors = geo.competitorCount || 0;
   const env = Object.fromEntries(geo.environment.map((group) => [group.label, group.count || 0]));
   const hasCrowd = (env["学校/大学"] || 0) + (env["写字楼/公司"] || 0) + (env["住宅小区"] || 0) > 0;
@@ -1540,7 +1540,7 @@ function normalizeSiteOptions(options, reportType) {
   }));
 }
 
-async function runSiteReport(record, env, body) {
+export async function runSiteReport(record, env, body) {
   const category = cleanText(body?.category, 30) || cleanText(record.category, 30) || "我不知道";
   const reportType = category === "我不知道" ? "recommend" : "feasibility";
   const geo = siteGeoSummary(record);
