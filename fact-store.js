@@ -22,6 +22,7 @@
   const DECISION_FIELDS = Object.freeze([
     "monthlyRevenue",
     "variableCostRate",
+    "fixedCostTotal",
     "rent",
     "labor",
     "ownerReplacementWage",
@@ -33,10 +34,21 @@
     "trafficMatch",
     "visibility",
     "retention",
-    "category"
+    "category",
+    "bottleneck",
+    "growthBottleneck",
+    "dailyOrders",
+    "channelMix",
+    "leaseRemaining",
+    "trialSale",
+    "targetCustomer",
+    "reversibleInvestment",
+    "staffCapacity",
+    "exitCost"
   ]);
   const MONTHLY_FLOW_FIELDS = new Set([
     "monthlyRevenue",
+    "fixedCostTotal",
     "rent",
     "labor",
     "ownerReplacementWage",
@@ -45,6 +57,7 @@
   const NUMERIC_DECISION_FIELDS = new Set([
     "monthlyRevenue",
     "variableCostRate",
+    "fixedCostTotal",
     "rent",
     "labor",
     "ownerReplacementWage",
@@ -54,7 +67,7 @@
     "plannedCommitment",
     "debt"
   ]);
-  const CHOICE_DECISION_FIELDS = new Set(["trafficMatch", "visibility", "retention"]);
+  const CHOICE_DECISION_FIELDS = new Set(["trafficMatch", "visibility", "retention", "trialSale", "reversibleInvestment"]);
 
   const hasOwn = (object, key) => Object.prototype.hasOwnProperty.call(object || {}, key);
   const clone = (value) => value === undefined ? undefined : JSON.parse(JSON.stringify(value));
@@ -232,6 +245,20 @@
       if (isExactFact(fact)) decisionInput[fact.field] = fact.value;
       else delete decisionInput[fact.field];
     }
+    // Older archives may contain a cost breakdown rather than the newer
+    // single fixed-cost answer. Derive it once, visibly marked as a calculation.
+    if (!isExactFact(decisionInput._factMeta.fixedCostTotal)) {
+      const parts = ["rent", "labor", "otherFixed"];
+      const ownerFact = decisionInput._factMeta.ownerReplacementWage;
+      if (parts.every((field) => isExactFact(decisionInput._factMeta[field])) && (!ownerFact || isExactFact(ownerFact))) {
+        const owner = ownerFact ? Number(decisionInput.ownerReplacementWage) : 0;
+        const value = parts.reduce((sum, field) => sum + Number(decisionInput[field]), owner);
+        const derived = normalizeFact({ field: "fixedCostTotal", value, unit: "CNY", period: "month", status: "confirmed", source: "calculation", evidenceGrade: "B", derivedFrom: parts.join("+") });
+        decisionInput._factMeta.fixedCostTotal = derived;
+        decisionInput.known.fixedCostTotal = true;
+        decisionInput.fixedCostTotal = value;
+      }
+    }
     return decisionInput;
   }
 
@@ -303,7 +330,7 @@
       return { fact: normalizeFact({ ...common, value: choice, range: null }), warning: null };
     }
 
-    if (field === "category") {
+    if (["category", "bottleneck", "growthBottleneck", "channelMix", "leaseRemaining", "targetCustomer"].includes(field)) {
       const value = String(rawFact.value || "").trim().slice(0, 80);
       return value
         ? { fact: normalizeFact({ ...common, value, range: null }), warning: null }

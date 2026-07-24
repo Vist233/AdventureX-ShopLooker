@@ -7,6 +7,7 @@ import worker, {
   enqueueAnalysisRound,
   handleQueueMessageFailure,
   normalizeAsrClientEvent,
+  publicDataScore,
   publicRunSnapshot,
   releaseAnalysisRoundClaim
 } from "./worker.mjs";
@@ -162,12 +163,19 @@ function mutateWavFixture(mutator) {
 }
 
 try {
+  const publicData = publicDataScore({
+    stage: "operating", location: { confirmed: true }, turns: [
+      { field: "monthlyRevenue" }, { field: "variableCostRate" }, { field: "fixedCostTotal" }, { field: "cashReserve" }, { field: "debt" }, { field: "bottleneck" }
+    ],
+    facts: Object.fromEntries(["monthlyRevenue", "variableCostRate", "fixedCostTotal", "cashReserve", "debt", "bottleneck"].map((field) => [field, { field, status: "confirmed", value: 1 }]))
+  });
+  assert.ok(publicData >= 70 && publicData <= 100);
   const asrConfig = asrSessionConfig({});
   assert.equal(asrConfig.session.audio.input.format.codec, "pcm_s16le");
   assert.equal(asrConfig.session.audio.input.format.rate, 16000);
   assert.equal(asrConfig.session.audio.input.transcription.model, "stepaudio-2.5-asr-stream");
   assert.equal(asrConfig.session.audio.input.transcription.full_rerun_on_commit, true);
-  assert.equal(asrConfig.session.audio.input.turn_detection.silence_duration_ms, 600);
+  assert.equal(asrConfig.session.audio.input.turn_detection.silence_duration_ms, 350);
   const normalizedAudio = normalizeAsrClientEvent({
     type: "input_audio_buffer.append",
     audio: "AQID"
@@ -576,13 +584,13 @@ try {
       body: {
         caseVersion: casLocation.version,
         corrections: [{
-          id: "rent",
-          value: 10_000,
-          unit: "元",
-          period: "月",
+          id: "variableCostRate",
+          value: 45,
+          unit: "%",
+          period: "month",
           status: "confirmed",
           source: "typed",
-          transcript: "房租一个月一万"
+          transcript: "每收一百元，直接成本四十五元"
         }]
       }
     }),
@@ -592,12 +600,12 @@ try {
       body: {
         caseVersion: casLocation.version,
         corrections: [{
-          id: "staffCount",
-          value: 5,
-          unit: "人",
+          id: "fixedCostTotal",
+          value: 50_000,
+          unit: "元",
           status: "confirmed",
           source: "typed",
-          transcript: "一共五个人"
+          transcript: "每月固定支出五万"
         }]
       }
     })
@@ -618,7 +626,7 @@ try {
     rejectedReviewPayload.facts.map((fact) => fact.id).sort(),
     winningReviewPayload.facts.map((fact) => fact.id).sort()
   );
-  const committedConcurrentFields = ["rent", "staffCount"].filter((id) =>
+  const committedConcurrentFields = ["variableCostRate", "fixedCostTotal"].filter((id) =>
     winningReviewPayload.facts.some((fact) => fact.id === id)
   );
   assert.equal(committedConcurrentFields.length, 1);
@@ -705,7 +713,7 @@ try {
   ]);
   assert.equal(committedPolicyTurn.status, 200);
   const policyPayload = await committedPolicyTurn.json();
-  assert.equal(policyPayload.nextQuestion.field, "category");
+  assert.equal(policyPayload.nextQuestion.field, "variableCostRate");
   assert.equal(rejectedConcurrentTurn.status, 409);
   // Depending on whether the initial turn has released its lock just before
   // the competing request reaches the Worker, a stale request is rejected by

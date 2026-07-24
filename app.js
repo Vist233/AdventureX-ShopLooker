@@ -4,7 +4,7 @@ const FLOW_ORDER = ["location", "interview", "review", "result"];
 // fun-asr-flash accepts a complete short audio file rather than a live stream.
 // The microphone stays open, while this client-side VAD cuts one answer after
 // a short silence and sends only that in-memory WAV file to the Worker.
-const LOCAL_VAD_SILENCE_MS = 600;
+const LOCAL_VAD_SILENCE_MS = 350;
 const LOCAL_VAD_PRE_ROLL_MS = 280;
 const LOCAL_VAD_MAX_SEGMENT_MS = 20_000;
 const DEMO_ORIGIN = "https://demo.yongge.zhangyvjing.com";
@@ -34,6 +34,10 @@ const state = {
     turnId: null,
     mode: "pending",
     transcript: "",
+    draft: "",
+    draftEdited: false,
+    draftSource: "",
+    progress: { asked: 0, coreTarget: 6, maxTurns: 12 },
     noSpeechCount: 0,
     submitInFlight: false,
     asrController: null,
@@ -648,6 +652,7 @@ async function createCase() {
       })
     }, 5000);
     state.firstQuestion = located.firstQuestion || null;
+    if (located.interview) state.interview.progress = located.interview;
     if (located.version) state.caseVersion = located.version;
   } catch (_) {
     state.caseId = `local-${Date.now()}`;
@@ -903,9 +908,11 @@ async function transcribeRecordedAnswer(wavBuffer) {
     const transcript = String(data.text || "").trim();
     if (transcript.length < 2) throw new Error("没有识别到有效回答");
     state.interview.transcript = transcript;
+    if (!state.interview.draftEdited) setAnswerDraft(transcript, "voice-final");
     $("liveTranscript").textContent = transcript;
     state.transcripts.push({ turnId: snapshot.turnId, text: transcript, question: snapshot.question });
-    await submitRemoteTurn(transcript, snapshot);
+    setListening("", "识别完成，请确认");
+    $("transcriptMode").textContent = state.interview.draftEdited ? "已保留你修改过的文字" : "云端识别已写入，可修改后确认";
   } catch (error) {
     if (
       error?.name === "AbortError"
@@ -915,8 +922,7 @@ async function transcribeRecordedAnswer(wavBuffer) {
       || state.interview.paused
       || state.interview.turnId !== snapshot.turnId
     ) return;
-    enableTextFallback(`阿里云没有听清：${error.message}。请直接修改这一题的文字。`);
-    $("fallbackAnswer").value = "";
+    enableTextFallback(`没有听清：${error.message}。请直接输入这一题。`);
   } finally {
     clearTimeout(timer);
     if (state.interview.asrController === controller) state.interview.asrController = null;
@@ -941,7 +947,8 @@ async function submitRemoteTurn(transcript, snapshot = {}) {
         turnId,
         questionId: snapshot.questionId || $("currentQuestion").dataset.factId,
         question: snapshot.question || $("currentQuestion").textContent,
-        transcript,
+        answer: transcript,
+        source: snapshot.source || state.interview.draftSource || "typed",
         expectedVersion: snapshot.caseVersion ?? state.caseVersion
       }),
       signal: controller.signal
@@ -956,6 +963,7 @@ async function submitRemoteTurn(transcript, snapshot = {}) {
     if (Array.isArray(data.extractedFacts)) data.extractedFacts.forEach(upsertFact);
     if (data.fact) upsertFact(data.fact);
     if (data.version || data.case?.version) state.caseVersion = data.version || data.case.version;
+    if (data.interview) state.interview.progress = data.interview;
     if (state.interview.finishRequested || data.complete || data.interviewComplete) {
       completeInterview();
       return;
@@ -1005,7 +1013,7 @@ async function speakQuestion(text, audioUrl = null) {
   state.audio?.setSending(false);
   stopRecognition();
   setListening("", "AI 正在提问");
-  $("questionHint").textContent = "问题播报结束后直接说，不需要再点按钮。";
+  $("questionHint").textContent = "可直接说，也可以输入；确认后才会进入下一题。";
   if (!audioUrl && !state.localMode && state.caseToken) {
     try {
       const response = await fetch("/api/tts", {
@@ -1050,7 +1058,7 @@ async function speakQuestion(text, audioUrl = null) {
   if (!state.interview.active || state.interview.paused) return;
   state.audio?.setSending(state.interview.mode === "dashscope-http");
   setListening("live", "正在听你说话");
-  $("questionHint").textContent = "直接回答。停顿约 1 秒后，系统识别整段回答。";
+  $("questionHint").textContent = "语音会先写入输入框；你确认后才会进入下一题。";
   if (state.interview.mode === "local-speech") startRecognition();
 }
 
@@ -1062,13 +1070,17 @@ function askQuestion(question, index = null) {
   if (Number.isFinite(index)) state.interview.questionIndex = index;
   state.interview.turnId = crypto.randomUUID ? crypto.randomUUID() : `turn-${Date.now()}`;
   state.interview.transcript = "";
+  state.interview.draft = "";
+  state.interview.draftEdited = false;
+  state.interview.draftSource = "";
+  $("fallbackAnswer").value = "";
   $("liveTranscript").textContent = "停顿后，整段识别结果会显示在这里";
   $("currentQuestion").textContent = question.text;
   $("currentQuestion").dataset.factId = question.id;
   $("currentQuestion").dataset.factKind = question.kind || "text";
   $("currentQuestion").dataset.factLabel = question.label || FACT_LABELS[question.id] || "事实";
-  const current = state.interview.questionIndex + 1;
-  $("questionProgress").textContent = `${Math.max(1, current)} / ${Math.min(30, questionList().length)}`;
+  const current = (state.interview.progress?.asked || state.interview.questionIndex + 1) + 1;
+  $("questionProgress").textContent = `第 ${Math.max(1, current)} / ${state.interview.progress?.coreTarget || 6} · 最多补至 ${state.interview.progress?.maxTurns || 12}`;
   void speakQuestion(question.text, question.audioUrl);
 }
 
@@ -1091,16 +1103,14 @@ function setupSpeechRecognition() {
   recognition.interimResults = true;
   recognition.onresult = (event) => {
     let combined = "";
-    let hasFinal = false;
     for (let i = event.resultIndex; i < event.results.length; i += 1) {
       combined += event.results[i][0].transcript;
-      hasFinal ||= event.results[i].isFinal;
     }
     if (combined.trim()) {
       state.interview.transcript = combined.trim();
       $("liveTranscript").textContent = state.interview.transcript;
+      if (!state.interview.draftEdited) setAnswerDraft(state.interview.transcript, "voice-interim");
     }
-    if (hasFinal && state.interview.transcript) handleLocalFinal(state.interview.transcript);
   };
   recognition.onerror = (event) => {
     if (["no-speech", "aborted"].includes(event.error)) return;
@@ -1108,9 +1118,7 @@ function setupSpeechRecognition() {
     if (state.interview.noSpeechCount >= 2) enableTextFallback("连续两次没有听清，请直接输入这一题。");
   };
   recognition.onend = () => {
-    if (state.interview.active && !state.interview.paused && state.interview.mode === "local-speech") {
-      setTimeout(startRecognition, 180);
-    }
+    if (state.interview.active && !state.interview.paused && state.interview.mode === "local-speech") startRecognition();
   };
   state.recognition = recognition;
   return true;
@@ -1136,7 +1144,7 @@ function activateLocalFallback(message) {
     ? "正在使用设备自带语音识别；答案仍会自动跳题"
     : "当前浏览器没有可用语音识别，请使用文字降级";
   $("interviewNotice").textContent = message;
-  $("textFallback").hidden = hasSpeech;
+  $("textFallback").hidden = false;
   state.interview.questionIndex = 0;
   askQuestion(questionAt(0), 0);
 }
@@ -1153,7 +1161,7 @@ async function beginInterview() {
   state.interview.paused = false;
   state.interview.complete = false;
   state.interview.questionIndex = -1;
-  $("textFallback").hidden = true;
+  $("textFallback").hidden = false;
   setListening("", "正在申请麦克风");
 
   state.audio = new ContinuousAudio(transcribeRecordedAnswer);
@@ -1248,7 +1256,7 @@ async function startDemoInterview() {
   upsertFact({ id: "category", label: "经营品类", kind: "text", value: $("category").value.trim(), status: "confirmed", source: "document", evidence: "B", raw: "字幕案例：私房小碗菜" });
   $("textFallback").hidden = true;
   $("pauseInterview").hidden = true;
-  $("finishInterview").hidden = true;
+  if ($("finishInterview")) $("finishInterview").hidden = true;
   $("transcriptMode").textContent = "演示模式：答案来自已筛选字幕；不会调用 ASR 或保存案卷";
   setPanel("interview");
   for (let index = 0; index < DEMO_CASE.turns.length; index += 1) {
@@ -1384,23 +1392,40 @@ function extractLocalFact(text) {
 
 function handleLocalFinal(text) {
   if (!state.interview.active || !text.trim()) return;
+  state.interview.transcript = text.trim();
+  if (!state.interview.draftEdited) setAnswerDraft(text.trim(), "voice-final");
+  setListening("", "识别完成，请确认");
+}
+
+function setAnswerDraft(text, source = "typed") {
+  const value = String(text || "").trim();
+  state.interview.draft = value;
+  state.interview.draftSource = source;
+  $("fallbackAnswer").value = value;
+}
+
+async function confirmAnswerDraft() {
+  const text = $("fallbackAnswer").value.trim();
+  if (!text || state.interview.submitInFlight) return;
   stopRecognition();
-  setListening("", "正在整理答案");
-  const fact = upsertFact(extractLocalFact(text.trim()));
-  state.transcripts.push({
+  const snapshot = {
     turnId: state.interview.turnId,
+    questionId: $("currentQuestion").dataset.factId,
     question: $("currentQuestion").textContent,
-    text: text.trim(),
-    factId: fact.id
-  });
-  state.interview.transcript = "";
-  const nextIndex = state.interview.questionIndex + 1;
-  if (nextIndex >= questionList().length || nextIndex >= 30) {
-    finishInterview();
-    return;
+    caseVersion: state.caseVersion,
+    source: state.interview.draftSource || "typed"
+  };
+  state.interview.draft = text;
+  $("liveTranscript").textContent = text;
+  state.transcripts.push({ turnId: snapshot.turnId, text, question: snapshot.question });
+  if (state.localMode || !state.caseId) {
+    const fact = upsertFact(extractLocalFact(text));
+    state.interview.progress.asked += 1;
+    const nextIndex = state.interview.questionIndex + 1;
+    if (nextIndex >= Math.min(questionList().length, 12)) return completeInterview();
+    return askQuestion(questionAt(nextIndex), nextIndex);
   }
-  state.interview.questionIndex = nextIndex;
-  setTimeout(() => askQuestion(questionAt(nextIndex), nextIndex), 280);
+  await submitRemoteTurn(text, snapshot);
 }
 
 function pauseInterview() {
@@ -2170,7 +2195,8 @@ function renderAnalysisResult(data) {
   $("result").hidden = false;
   const assessment = data.deterministic || data.assessment || data;
   const metrics = assessment.metrics || {};
-  $("decisionCode").textContent = assessment.decision || "EVIDENCE";
+  const decisionLabels = { GO: "可以继续", TEST: "小步验证", STOP: "停止追加", EXIT: "准备退出", EVIDENCE: "小步验证" };
+  $("decisionCode").textContent = decisionLabels[assessment.decision] || "小步验证";
   $("confidenceLabel").textContent = `证据完整度 ${Number.isFinite(metrics.completeness) ? `${metrics.completeness}%` : "待补"}`;
   $("decisionTitle").textContent = assessment.title || "先补证据，再做决定";
   $("decisionReason").textContent = assessment.reason || "系统没有获得足够证据形成精确经营结论。";
@@ -2192,12 +2218,12 @@ function renderAnalysisResult(data) {
   const narrative = data.narrative || data.explanation || {};
   $("narrative").innerHTML = `<h3>${escapeHtml(narrative.title || narrative.headline || "为什么这样判断")}</h3><p>${escapeHtml(narrative.body || narrative.diagnosis || assessment.reason || "")}</p>`;
   renderResultFactEvidence();
-  const plans = (data.topPlans || data.top3 || data.plans || []).slice(0, 3).map(normalizePlan);
-  const evidenceTasks = (data.evidence_tasks || []).slice(0, 3).map(normalizePlan);
-  $("candidateCount").textContent = `${data.candidateCount ?? data.generated ?? 3} 个候选 · ${data.verified ?? plans.length} 个通过`;
+  const plans = (data.topPlans || data.top3 || data.plans || []).slice(0, 2).map(normalizePlan);
+  const evidenceTasks = (data.evidence_tasks || []).slice(0, 1).map(normalizePlan);
+  $("candidateCount").textContent = plans.length > 1 ? "主方案 + 已核验备选" : plans.length ? "主方案" : "";
   $("planList").innerHTML = plans.length ? plans.map((plan, index) => `
     <article class="plan-card" data-testid="plan-${index + 1}" data-plan-id="${escapeHtml(plan.id)}">
-      <div class="plan-rank"><span>TOP ${index + 1} · ${escapeHtml(plan.bottleneck)}</span><span class="plan-score">${escapeHtml(plan.score)} 分</span></div>
+      <div class="plan-rank"><span>${index === 0 ? "主方案" : "备选方案"} · ${escapeHtml(plan.bottleneck)}</span></div>
       <h4>${escapeHtml(plan.title)}</h4>
       <p>${escapeHtml(plan.action)}</p>
       <div class="plan-meta">
@@ -2229,6 +2255,36 @@ function renderAnalysisResult(data) {
     ? rejected.map((reason) => `<p>· ${escapeHtml(reason)}</p>`).join("")
     : "<p>候选方案因证据不足、财务不成立、不可逆或无法测量而被淘汰。</p>";
   renderFootfall();
+  void publishAnonymousCaseIfEligible();
+}
+
+async function publishAnonymousCaseIfEligible() {
+  if (state.localMode || !state.caseId || !state.caseToken) return;
+  const key = `shoplooker-public:${state.caseId}`;
+  if (localStorage.getItem(key)) return;
+  try {
+    const data = await fetchJson(`/api/cases/${encodeURIComponent(state.caseId)}/publish`, {
+      method: "POST", headers: caseHeaders({ "Content-Type": "application/json" }), body: "{}"
+    }, 10000);
+    if (data.publicId && data.manageToken) {
+      localStorage.setItem(key, JSON.stringify({ publicId: data.publicId, manageToken: data.manageToken }));
+      $("candidateCount").textContent = `${$("candidateCount").textContent} · 已匿名发布`;
+      const button = document.createElement("button");
+      button.type = "button"; button.className = "secondary-button"; button.textContent = "下架匿名案例";
+      button.addEventListener("click", async () => {
+        const saved = JSON.parse(localStorage.getItem(key) || "{}");
+        if (!saved.publicId || !saved.manageToken) return;
+        await fetchJson(`/api/public-cases/${encodeURIComponent(saved.publicId)}`, {
+          method: "DELETE", headers: { "X-Public-Manage-Token": saved.manageToken }
+        }, 8000);
+        localStorage.removeItem(key); button.remove();
+        $("candidateCount").textContent = $("candidateCount").textContent.replace(" · 已匿名发布", "");
+      });
+      $("result").querySelector(".result-actions")?.append(button);
+    }
+  } catch (_) {
+    // Publishing is optional and never blocks the private result.
+  }
 }
 
 async function startSelectedPlan(planId, button) {
@@ -2295,7 +2351,8 @@ function resetFlow() {
   });
   state.interview = {
     active: false, paused: false, complete: false, questionIndex: -1,
-    turnId: null, mode: "pending", transcript: "", noSpeechCount: 0,
+    turnId: null, mode: "pending", transcript: "", draft: "", draftEdited: false, draftSource: "",
+    progress: { asked: 0, coreTarget: 6, maxTurns: 12 }, noSpeechCount: 0,
     submitInFlight: false, asrController: null, turnController: null,
     finishRequested: false, pendingQuestion: null
   };
@@ -2355,36 +2412,18 @@ $("manualLocation").addEventListener("keydown", (event) => {
 });
 $("beginInterview").addEventListener("click", () => void beginInterview());
 $("pauseInterview").addEventListener("click", pauseInterview);
-$("finishInterview").addEventListener("click", finishInterview);
 $("reviewForm").addEventListener("submit", (event) => {
   event.preventDefault();
   void submitReviewForm();
 });
 $("textFallback").addEventListener("submit", (event) => {
   event.preventDefault();
-  const text = $("fallbackAnswer").value.trim();
-  if (!text) return;
-  $("fallbackAnswer").value = "";
-  if (state.interview.mode === "local-speech" || state.interview.mode === "local-text") {
-    $("liveTranscript").textContent = text;
-    handleLocalFinal(text);
-  } else {
-    $("liveTranscript").textContent = text;
-    const snapshot = {
-      turnId: state.interview.turnId,
-      questionId: $("currentQuestion").dataset.factId,
-      question: $("currentQuestion").textContent,
-      caseVersion: state.caseVersion
-    };
-    state.transcripts.push({ turnId: snapshot.turnId, text, question: snapshot.question });
-    void submitRemoteTurn(text, snapshot);
-  }
+  void confirmAnswerDraft();
 });
-$("fallbackAnswer").addEventListener("keydown", (event) => {
-  if (event.key === "Enter" && !event.shiftKey) {
-    event.preventDefault();
-    $("textFallback").requestSubmit();
-  }
+$("fallbackAnswer").addEventListener("input", () => {
+  state.interview.draftEdited = true;
+  state.interview.draft = $("fallbackAnswer").value;
+  state.interview.draftSource = "typed";
 });
 $("startAnalysis").addEventListener("click", () => void startAnalysis());
 $("restartButton").addEventListener("click", resetFlow);

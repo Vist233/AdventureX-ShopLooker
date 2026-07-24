@@ -13,6 +13,7 @@
       <span class="brand-mark">判</span>
       <span>店判</span>
     </a>
+    <a class="topbar-ranking" href="/ranking.html">匿名案例榜</a>
     <span class="topbar-proof"><b id="heroTitles">623</b> 个真实餐饮案例校准</span>
   </header>
 
@@ -249,34 +250,29 @@
         <section class="flow-card flow-panel interview-panel" id="interviewPanel" data-panel="interview" hidden data-testid="interview-step">
           <div class="interview-topline">
             <span class="listening-pill" id="listeningPill"><i></i><b id="listeningLabel">正在准备</b></span>
-            <span id="questionProgress" data-testid="question-progress">0 / 30</span>
+            <span id="questionProgress" data-testid="question-progress">第 1 / 6 · 最多补至 12</span>
           </div>
 
           <div class="question-stage" aria-live="polite">
-            <small>请回答屏幕上的问题</small>
             <h3 id="currentQuestion" data-testid="current-question">正在准备第一个问题…</h3>
-            <p id="questionHint">问题播报结束后直接说，不需要再点按钮。</p>
+            <p id="questionHint">可语音或输入；确认后才进入下一题。</p>
           </div>
 
           <div class="transcript-shell">
-            <span>本轮回答</span>
-            <p id="liveTranscript" aria-live="polite" data-testid="live-transcript">停顿后，整段识别结果会显示在这里</p>
-            <small id="transcriptMode">正在准备阿里云语音识别…</small>
+            <p id="liveTranscript" aria-live="polite" data-testid="live-transcript">语音识别会即时写入下方输入框</p>
+            <small id="transcriptMode">正在准备语音识别…</small>
           </div>
 
-          <form class="text-fallback" id="textFallback" hidden data-testid="text-fallback">
-            <label for="fallbackAnswer">当前设备无法稳定使用语音，可直接输入这一题</label>
-            <textarea id="fallbackAnswer" rows="3" placeholder="输入答案后按 Enter 发送；Shift + Enter 换行"></textarea>
-            <button type="submit" class="secondary-button">发送这句</button>
+          <form class="text-fallback" id="textFallback" data-testid="text-fallback">
+            <label for="fallbackAnswer">回答</label>
+            <textarea id="fallbackAnswer" rows="3" placeholder="可直接输入，或等待语音识别写入"></textarea>
+            <button type="submit" class="primary-button" id="confirmAnswer">确认并下一题</button>
           </form>
 
           <div class="interview-controls">
             <button class="secondary-button" id="pauseInterview" type="button" data-testid="pause-interview">暂停</button>
-            <button class="danger-button" id="finishInterview" type="button" data-testid="finish-interview">结束并去纠偏</button>
           </div>
-          <p class="interview-note" id="interviewNotice" role="status" aria-live="polite">
-            AI 播报时不会上传麦克风音频，避免把自己的声音识别成你的回答。
-          </p>
+          <p class="interview-note" id="interviewNotice" role="status" aria-live="polite"></p>
         </section>
 
         <section class="flow-card flow-panel review-panel" id="reviewPanel" data-panel="review" hidden data-testid="review-step">
@@ -305,44 +301,46 @@
 
         <section class="flow-card flow-panel analysis-panel" id="analysisPanel" data-panel="result" hidden data-testid="analysis-step">
           <div id="analysisProgress" data-testid="analysis-progress">
-            <span class="analysis-orbit" aria-hidden="true"><i></i><i></i><i></i></span>
+            <span class="brand-mark analysis-mark" aria-hidden="true">判</span>
             <span class="section-kicker">正在后台分析</span>
             <h3 id="analysisTitle">先按勇哥框架算账</h3>
             <p id="analysisStatus">正在检查单位经济、现金寿命和第一断点…</p>
             <div class="analysis-track"><i id="analysisProgressBar"></i></div>
             <ol class="analysis-steps" id="analysisSteps">
               <li class="active">确定性算账</li>
-              <li>生成 3 个候选</li>
+              <li>生成主方案</li>
               <li>证据与因果核验</li>
               <li>财务与执行核验</li>
-              <li>去重并选出 Top 3</li>
+              <li>生成已核验备选</li>
             </ol>
           </div>
 
           <section class="result-shell" id="result" hidden aria-live="polite" data-testid="result">
             <div class="result-main">
-              <div><span id="decisionCode">TEST</span><small id="confidenceLabel">证据完整度 —</small></div>
+              <div><span id="decisionCode">小步验证</span><small id="confidenceLabel">证据完整度 —</small></div>
               <h2 id="decisionTitle">—</h2>
               <p id="decisionReason">—</p>
             </div>
             <div class="result-metrics" id="resultMetrics"></div>
             <div class="narrative" id="narrative"></div>
-            <section class="result-fact-evidence" id="resultFactEvidence" data-testid="result-fact-evidence">
+            <details class="result-fact-evidence" id="resultFactEvidence" data-testid="result-fact-evidence">
+              <summary>查看事实与核验依据</summary>
               <div>
                 <span class="section-kicker">本次判断基于什么</span>
                 <h3>先看已确认事实，再看结论。</h3>
                 <p id="resultFactSummary">正在整理本次案卷的事实边界…</p>
               </div>
               <div class="result-fact-list" id="resultFactList"></div>
-            </section>
-            <section class="footfall-result-evidence" id="footfallResultEvidence" data-testid="footfall-result-evidence">
+            </details>
+            <details class="footfall-result-evidence" id="footfallResultEvidence" data-testid="footfall-result-evidence">
+              <summary>查看现场客流证据</summary>
               <span class="section-kicker">现场五段转化证据</span>
               <p>尚未进行 20 分钟现场计数。地图 POI 不能代替这项证据。</p>
-            </section>
+            </details>
 
             <div class="plans-heading">
-              <div><span class="section-kicker">经过搜索和核验</span><h3>最值得先做的方案</h3></div>
-              <span id="candidateCount">3 个候选</span>
+              <div><span class="section-kicker">已通过核验</span><h3>下一步方案</h3></div>
+              <span id="candidateCount"></span>
             </div>
             <div class="plan-list" id="planList" data-testid="top-plans"></div>
             <details class="rejected">

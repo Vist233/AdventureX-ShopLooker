@@ -33,6 +33,20 @@ export function getRequiredInterviewFields(stage) {
   return interviewPolicy.getRequiredFields(stage);
 }
 
+export function getOptionalInterviewFields(stage) {
+  return interviewPolicy.getOptionalFields(stage);
+}
+
+export function getAllowedInterviewFields(stage) {
+  return interviewPolicy.getAllowedFields(stage);
+}
+
+// Every external answer, including model extraction and an edited transcript,
+// enters the same schema/period/unit normalizer before it can affect a result.
+export function normalizeServerFacts(rawFacts) {
+  return globalThis.FactStore.adaptServerFacts(rawFacts);
+}
+
 export const INTERVIEW_LIMITS = Object.freeze({
   maxTurns: interviewPolicy.MAX_TURNS,
   maxAttemptsPerField: interviewPolicy.MAX_ATTEMPTS_PER_FIELD

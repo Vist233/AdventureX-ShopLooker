@@ -13,7 +13,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
 DIST = ROOT / "dist"
-PUBLIC_FILES = ("index.html", "styles.css", "fact-store.js", "decision-engine.js", "app.js")
+PUBLIC_FILES = ("index.html", "ranking.html", "ranking.js", "styles.css", "fact-store.js", "decision-engine.js", "app.js")
 PUBLIC_DATA = ("corpus_analysis.json",)
 
 

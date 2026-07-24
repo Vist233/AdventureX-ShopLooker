@@ -11,6 +11,8 @@ import {
   computeServerDecision,
   evaluateInterviewCompleteness,
   sanitizeAgentNextQuestion,
+  normalizeServerFacts,
+  getAllowedInterviewFields,
   INTERVIEW_LIMITS
 } from "./server-decision-adapter.mjs";
 
@@ -25,6 +27,7 @@ const json = (body, status = 200) => new Response(JSON.stringify(body), {
 
 const caseStore = new Map();
 const runStore = new Map();
+const publicCaseStore = new Map();
 const rateBuckets = new Map();
 const localAsrSessions = new Map();
 const localTurnLocks = new Set();
@@ -37,11 +40,11 @@ const MAX_ASR_SESSIONS_PER_CASE = 3;
 const MAX_ASR_SESSION_MS = 20 * 60 * 1000;
 const MAX_ASR_AUDIO_BYTES = 40 * 1024 * 1024;
 const MAX_ASR_CLIP_BYTES = 3 * 1024 * 1024;
-export const ASR_SILENCE_DURATION_MS = 600;
+export const ASR_SILENCE_DURATION_MS = 350;
 const DAILY_WINDOW_MS = 26 * 60 * 60 * 1000;
-const SEARCH_TARGET = 3;
+const SEARCH_TARGET = 2;
 const SEARCH_ROUNDS = 1;
-const SEARCH_CONCURRENCY = 3;
+const SEARCH_CONCURRENCY = 1;
 const DEFAULT_DAILY_ANALYSIS_BUDGET = 25;
 const DEFAULT_DAILY_IP_ANALYSIS_BUDGET = 5;
 const ACTION_RATE_LIMITS = {
@@ -961,7 +964,28 @@ function safeFactsForModel(facts) {
   }]));
 }
 
-async function processInterviewTurn(record, transcript, llm) {
+function canonicalInterviewFacts(rawFacts, { stage, source = "voice", transcript = "" } = {}) {
+  const allowed = new Set(getAllowedInterviewFields(stage));
+  const filtered = (Array.isArray(rawFacts) ? rawFacts : [])
+    .filter((fact) => allowed.has(cleanText(fact?.field || fact?.id, 60)))
+    .map((fact) => ({ ...fact, source, transcript, rawTranscript: transcript }));
+  const { facts } = normalizeServerFacts(filtered);
+  return facts.map((fact) => ({
+    id: fact.field,
+    field: fact.field,
+    value: fact.value,
+    range: fact.range,
+    unit: fact.unit || "",
+    period: fact.period || "",
+    status: fact.status,
+    source: fact.source,
+    evidence: fact.evidenceGrade,
+    transcript: fact.rawTranscript || transcript,
+    updatedAt: nowIso()
+  }));
+}
+
+async function processInterviewTurn(record, transcript, llm, source = "voice") {
   const attemptedTurn = {
     field: record.currentQuestion?.field || nextQuestion(record).field
   };
@@ -969,13 +993,21 @@ async function processInterviewTurn(record, transcript, llm) {
     turns: [...record.turns, attemptedTurn]
   });
   const fallback = sanitizeAgentNextQuestion(null, fallbackState);
+  const currentField = attemptedTurn.field;
+  if (/^(不知道|不清楚|不确定|没有数据|unknown)$/i.test(String(transcript).trim())) {
+    const facts = canonicalInterviewFacts([{
+      id: currentField, field: currentField, status: "unknown", value: null, evidence: "U"
+    }], { stage: record.stage, source, transcript });
+    const stateAfterTurn = interviewPolicyState(record, { facts: { ...record.facts, [currentField]: facts[0] }, turns: [...record.turns, attemptedTurn] });
+    return { facts, nextQuestion: sanitizeAgentNextQuestion(null, stateAfterTurn), mode: "deterministic-unknown" };
+  }
   if (!llm) {
     return { facts: [], nextQuestion: fallback, mode: "deterministic-fallback" };
   }
   const response = await llm([
     {
       role: "system",
-      content: "你负责餐饮问诊中的事实抽取和下一问。只返回JSON。不得把未知当0，不得把流水当利润；金额必须保存单位和周期；范围保留范围。下一问不超过30个汉字，只问一个问题。"
+      content: "你只负责从本轮餐饮回答中抽取事实。只返回JSON；不得提问、不得决定流程。不得把未知当0，不得把流水当利润；金额必须保存单位和周期；范围保留范围。"
     },
     {
       role: "user",
@@ -991,7 +1023,6 @@ async function processInterviewTurn(record, transcript, llm) {
             unit: "", period: "", status: "provisional|unknown|conflict",
             evidence: "C|D"
           }],
-          next_question: { field: "field", text: "不超过30字", complete: false },
           contradictions: []
         }
       })
@@ -1004,21 +1035,14 @@ async function processInterviewTurn(record, transcript, llm) {
     // policy continues immediately and the review screen catches omissions.
     timeoutMs: 7000
   });
-  const facts = Array.isArray(response?.facts)
-    ? response.facts.map((fact) => normalizeFact({ ...fact, transcript }, "voice")).filter(Boolean).slice(0, 8)
-    : [];
+  const facts = canonicalInterviewFacts(response?.facts, { stage: record.stage, source, transcript }).slice(0, 8);
   const mergedFacts = { ...record.facts };
   for (const fact of facts) mergedFacts[fact.id] = fact;
   const stateAfterTurn = interviewPolicyState(record, {
     facts: mergedFacts,
     turns: [...record.turns, attemptedTurn]
   });
-  const proposed = response?.next_question || {};
-  const next = sanitizeAgentNextQuestion({
-    field: cleanText(proposed.field, 60),
-    text: trimText(proposed.text, 30),
-    complete: proposed.complete === true
-  }, stateAfterTurn);
+  const next = sanitizeAgentNextQuestion(null, stateAfterTurn);
   return {
     facts,
     nextQuestion: next,
@@ -1085,7 +1109,8 @@ async function saveLocation(request, env, caseId) {
     caseId,
     version: record.version,
     location: record.location,
-    firstQuestion: record.currentQuestion
+    firstQuestion: record.currentQuestion,
+    interview: evaluateInterviewCompleteness(interviewPolicyState(record))
   });
 }
 
@@ -1105,7 +1130,8 @@ async function interviewTurn(request, env, caseId) {
     });
   }
   const body = await readJson(request);
-  const transcript = trimText(body.transcript, 4000);
+  const transcript = trimText(body.answer ?? body.transcript, 4000);
+  const source = ["voice", "typed", "choice"].includes(body.source) ? body.source : "voice";
   if (transcript.length < 2) {
     return apiJson(request, env, {
       code: "EMPTY_TRANSCRIPT",
@@ -1155,7 +1181,7 @@ async function interviewTurn(request, env, caseId) {
     const llm = createTextLlm(env);
     let processed;
     try {
-      processed = await processInterviewTurn(working, transcript, llm);
+      processed = await processInterviewTurn(working, transcript, llm, source);
     } catch (error) {
       processed = {
         facts: [],
@@ -1170,6 +1196,7 @@ async function interviewTurn(request, env, caseId) {
       field: questionSnapshot?.field || "",
       question: questionSnapshot?.text || "",
       transcript,
+      source,
       createdAt: nowIso()
     };
     working.turns.push(committedTurn);
@@ -1198,6 +1225,7 @@ async function interviewTurn(request, env, caseId) {
       extractedFacts: processed.facts,
       contradictions: processed.contradictions || [],
       nextQuestion: working.currentQuestion,
+      interview: evaluateInterviewCompleteness(interviewPolicyState(working)),
       complete: working.currentQuestion.complete || working.turns.length >= INTERVIEW_LIMITS.maxTurns,
       mode: processed.mode,
       warning: processed.warning
@@ -1249,15 +1277,16 @@ async function reviewFacts(request, env, caseId) {
   for (const correction of corrections) {
     const id = cleanText(correction.id, 60);
     if (!id) continue;
-    const existing = working.facts[id] || { id, field: id };
     const source = correction.source === "typed" ? "typed" : "choice";
-    const normalized = normalizeFact({
+    const existing = working.facts[id] || { id, field: id };
+    const normalized = canonicalInterviewFacts([{
       ...existing,
       ...correction,
       id,
+      field: id,
       source,
       evidence: correction.status === "unknown" ? "U" : "B"
-    }, source);
+    }], { stage: working.stage, source, transcript: correction.rawTranscript || correction.transcript || "" })[0];
     if (normalized && !equivalentFact(existing, normalized)) {
       working.facts[id] = normalized;
       changed += 1;
@@ -2197,6 +2226,125 @@ async function asrRelay(request, env, caseId, ctx) {
   return new Response(null, { status: 101, webSocket: client });
 }
 
+export const PUBLIC_METRICS = new Set(["revenue", "orders", "gross_margin", "cost", "cash_burn"]);
+const LOWER_IS_BETTER = new Set(["cost", "cash_burn"]);
+
+function publicDecisionLabel(decision) {
+  return ({ GO: "可以继续", TEST: "小步验证", STOP: "停止追加", EXIT: "准备退出", EVIDENCE: "小步验证" })[decision] || "小步验证";
+}
+
+export function publicDataScore(record) {
+  const core = evaluateInterviewCompleteness(interviewPolicyState(record)).requiredFields;
+  const allowed = getAllowedInterviewFields(record.stage);
+  const factScore = (field) => {
+    const fact = record.facts?.[field];
+    if (!fact || fact.status === "unknown" || fact.status === "conflict") return 0;
+    return fact.status === "confirmed" ? 1 : .65;
+  };
+  const coreScore = core.length ? core.reduce((sum, field) => sum + factScore(field), 0) / core.length : 0;
+  const optional = allowed.filter((field) => !core.includes(field));
+  const optionalScore = optional.length ? optional.reduce((sum, field) => sum + factScore(field), 0) / optional.length : 0;
+  return Math.round((coreScore * .7 + optionalScore * .3) * 100);
+}
+
+function safePublicFacts(record) {
+  const fields = ["monthlyRevenue", "variableCostRate", "fixedCostTotal", "cashReserve", "debt", "bottleneck", "growthBottleneck", "trialSale", "trafficMatch", "visibility", "retention"];
+  return fields.flatMap((field) => {
+    const fact = record.facts?.[field];
+    if (!fact || fact.status === "unknown" || fact.status === "conflict") return [];
+    // Do not publish raw amounts. Share only non-reversible operating signals.
+    if (["monthlyRevenue", "fixedCostTotal", "cashReserve", "debt"].includes(field)) return [];
+    return [{ field, value: fact.value, range: fact.range || null, status: fact.status }];
+  });
+}
+
+function verifiedPlans(run) {
+  return (run?.result?.top3 || []).filter((plan) => plan?.verification?.passed !== false && plan?.verified !== false).slice(0, 2);
+}
+
+async function readPublicCases(env) {
+  if (!env.DB) return [...publicCaseStore.values()].filter((row) => row.isActive).sort((a, b) => b.rankScore - a.rankScore);
+  const result = await env.DB.prepare("SELECT * FROM public_cases WHERE is_active = 1 ORDER BY rank_score DESC, updated_at DESC LIMIT 100").all();
+  return (result.results || []).map((row) => ({
+    id: row.id, snapshot: JSON.parse(row.snapshot_json || "{}"), dataScore: Number(row.data_score),
+    outcomeScore: Number(row.outcome_score), rankScore: Number(row.rank_score), isActive: Boolean(row.is_active), updatedAt: row.updated_at
+  }));
+}
+
+async function leaderboard(request, env) {
+  const rows = await readPublicCases(env);
+  return apiJson(request, env, {
+    cases: rows.map((row, index) => ({ rank: index + 1, id: row.id, ...row.snapshot, dataScore: row.dataScore, outcomeScore: row.outcomeScore, rankScore: row.rankScore, updatedAt: row.updatedAt }))
+  });
+}
+
+async function publishCase(request, env, caseId) {
+  const record = await requireCase(request, env, caseId);
+  const run = await loadRun(env, record.latestRunId);
+  const decision = computeServerDecision(record);
+  const dataScore = publicDataScore(record);
+  const plans = verifiedPlans(run);
+  if (!run || run.status !== "completed" || !plans.length || decision.decision === "EVIDENCE" || dataScore < 70) {
+    return apiJson(request, env, { code: "PUBLICATION_NOT_READY", message: "核心事实、确定性结论和主方案核验完成后才会匿名公开" }, 422);
+  }
+  const id = secureId("public");
+  const manageToken = secureId("manage");
+  const timestamp = nowIso();
+  const snapshot = {
+    stage: record.stage,
+    category: cleanText(record.facts?.category?.value, 80) || "餐饮",
+    conclusion: publicDecisionLabel(decision.decision),
+    signals: safePublicFacts(record),
+    plans: plans.map((plan, index) => ({ role: index === 0 ? "主方案" : "备选方案", title: trimText(plan.title, 120), action: trimText(plan.action, 300), metric: trimText(plan.metric, 80), successLine: trimText(plan.success_line || plan.successLine, 120), stopLine: trimText(plan.stop_line || plan.stopLine, 120) })),
+    evidenceScore: Number(decision.metrics?.completeness) || dataScore
+  };
+  const row = { id, sourceCaseId: record.id, manageTokenHash: await tokenHash(manageToken), snapshot, dataScore, outcomeScore: 0, rankScore: Math.round(dataScore * .7), isActive: true, createdAt: timestamp, updatedAt: timestamp };
+  publicCaseStore.set(id, row);
+  if (env.DB) await env.DB.prepare(`INSERT INTO public_cases (id, source_case_id, manage_token_hash, snapshot_json, data_score, outcome_score, rank_score, is_active, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?)`)
+    .bind(row.id, row.sourceCaseId, row.manageTokenHash, JSON.stringify(row.snapshot), row.dataScore, row.outcomeScore, row.rankScore, timestamp, timestamp).run();
+  return apiJson(request, env, { publicId: id, manageToken, rankScore: row.rankScore, snapshot });
+}
+
+async function updatePublicOutcome(request, env, publicId) {
+  const body = await readJson(request);
+  const manageToken = request.headers.get("X-Public-Manage-Token") || body.manageToken;
+  const metric = cleanText(body.metric, 30);
+  const before = Number(body.before);
+  const after = Number(body.after);
+  if (!PUBLIC_METRICS.has(metric) || !Number.isFinite(before) || !Number.isFinite(after) || before < 0 || after < 0) return apiJson(request, env, { code: "OUTCOME_INVALID", message: "请提交有效的结构化前后数据" }, 422);
+  let row = publicCaseStore.get(publicId);
+  if (env.DB) {
+    const stored = await env.DB.prepare("SELECT * FROM public_cases WHERE id = ? AND is_active = 1").bind(publicId).first();
+    if (!stored) return apiJson(request, env, { code: "PUBLIC_CASE_NOT_FOUND", message: "公开案例不存在" }, 404);
+    row = { id: stored.id, manageTokenHash: stored.manage_token_hash, snapshot: JSON.parse(stored.snapshot_json), dataScore: Number(stored.data_score), outcomeScore: Number(stored.outcome_score), rankScore: Number(stored.rank_score), isActive: Boolean(stored.is_active) };
+  }
+  if (!row || !manageToken || await tokenHash(manageToken) !== row.manageTokenHash) return apiJson(request, env, { code: "PUBLIC_CASE_FORBIDDEN", message: "案例管理凭证无效" }, 403);
+  const delta = LOWER_IS_BETTER.has(metric) ? (before - after) / Math.max(before, 1) : (after - before) / Math.max(before, 1);
+  const outcomeScore = Math.round(Math.max(0, Math.min(100, delta * 100)));
+  const rankScore = Math.round(row.dataScore * .7 + outcomeScore * .3);
+  const timestamp = nowIso();
+  if (env.DB) {
+    await env.DB.prepare("INSERT INTO public_case_outcomes (id, public_case_id, metric, before_value, after_value, created_at) VALUES (?, ?, ?, ?, ?, ?)").bind(secureId("outcome"), publicId, metric, before, after, timestamp).run();
+    await env.DB.prepare("UPDATE public_cases SET outcome_score = ?, rank_score = ?, updated_at = ? WHERE id = ?").bind(outcomeScore, rankScore, timestamp, publicId).run();
+  }
+  publicCaseStore.set(publicId, { ...row, outcomeScore, rankScore, updatedAt: timestamp });
+  return apiJson(request, env, { outcomeScore, rankScore });
+}
+
+async function unpublishCase(request, env, publicId) {
+  const body = request.method === "DELETE" ? {} : await readJson(request);
+  const manageToken = request.headers.get("X-Public-Manage-Token") || body.manageToken;
+  let row = publicCaseStore.get(publicId);
+  if (env.DB) {
+    const stored = await env.DB.prepare("SELECT manage_token_hash FROM public_cases WHERE id = ? AND is_active = 1").bind(publicId).first();
+    row = stored ? { manageTokenHash: stored.manage_token_hash } : null;
+  }
+  if (!row || !manageToken || await tokenHash(manageToken) !== row.manageTokenHash) return apiJson(request, env, { code: "PUBLIC_CASE_FORBIDDEN", message: "案例管理凭证无效" }, 403);
+  if (env.DB) await env.DB.prepare("UPDATE public_cases SET is_active = 0, updated_at = ? WHERE id = ?").bind(nowIso(), publicId).run();
+  publicCaseStore.delete(publicId);
+  return apiJson(request, env, { unpublished: true });
+}
+
 async function routeCases(request, env, ctx, url) {
   const parts = url.pathname.split("/").filter(Boolean);
   if (request.method === "POST" && parts.length === 2) return createCase(request, env);
@@ -2213,6 +2361,7 @@ async function routeCases(request, env, ctx, url) {
   }
   if (request.method === "POST" && parts[3] === "review") return reviewFacts(request, env, caseId);
   if (request.method === "POST" && parts[3] === "analyze") return startAnalysis(request, env, caseId, ctx);
+  if (request.method === "POST" && parts[3] === "publish") return publishCase(request, env, caseId);
   if (request.method === "GET" && parts[3] === "runs" && parts[4]) {
     return getRun(request, env, caseId, cleanId(parts[4], 80), parts[5] === "events");
   }
@@ -2338,6 +2487,12 @@ export default {
         }, Number(error?.status) || 502);
       }
     }
+    if (request.method === "GET" && url.pathname === "/api/leaderboard") {
+      return leaderboard(request, env);
+    }
+    const publicMatch = url.pathname.match(/^\/api\/public-cases\/([^/]+)$/);
+    if (publicMatch && request.method === "POST") return updatePublicOutcome(request, env, cleanId(publicMatch[1], 100));
+    if (publicMatch && request.method === "DELETE") return unpublishCase(request, env, cleanId(publicMatch[1], 100));
     if (url.pathname.startsWith("/api/cases")) {
       try {
         const response = await routeCases(request, env, ctx, url);

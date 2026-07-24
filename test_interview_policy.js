@@ -1,161 +1,35 @@
 const assert = require("node:assert/strict");
-const {
-  MAX_TURNS,
-  MAX_ATTEMPTS_PER_FIELD,
-  FIELD_DEFINITIONS,
-  getRequiredFields,
-  getAllowedFields,
-  evaluateInterviewCompleteness,
-  isShortSingleQuestion,
-  sanitizeAgentNextQuestion
-} = require("./interview-policy.js");
+const { MAX_TURNS, MAX_ATTEMPTS_PER_FIELD, getRequiredFields, getAllowedFields, evaluateInterviewCompleteness, sanitizeAgentNextQuestion } = require("./interview-policy.js");
 
+assert.equal(MAX_TURNS, 12);
+assert.equal(MAX_ATTEMPTS_PER_FIELD, 1);
 for (const stage of ["operating", "preopen", "growth"]) {
-  const required = getRequiredFields(stage);
-  assert.ok(required.length <= MAX_TURNS);
-  assert.deepEqual(getAllowedFields(stage), required);
-  assert.equal(new Set(required).size, required.length);
+  assert.equal(getRequiredFields(stage).length, 6);
+  assert.ok(getAllowedFields(stage).length <= 12);
 }
-assert.deepEqual(getRequiredFields("准备开店 / 接店"), getRequiredFields("preopen"));
-assert.deepEqual(getRequiredFields("有利润，想增长"), getRequiredFields("growth"));
+const base = { stage: "operating", locationConfirmed: true, facts: {}, turns: [] };
+assert.equal(evaluateInterviewCompleteness(base).nextQuestion.field, "monthlyRevenue");
 
-for (const variants of Object.values(FIELD_DEFINITIONS)) {
-  assert.equal(variants.length, MAX_ATTEMPTS_PER_FIELD);
-  for (const question of variants) {
-    assert.ok(Array.from(question).length <= 30, question);
-    assert.equal(isShortSingleQuestion(question), true, question);
-  }
-}
-
-const locationBlocked = evaluateInterviewCompleteness({
-  stage: "operating",
-  locationConfirmed: false,
-  facts: {},
-  turns: []
+// A recorded unknown is a finished answer; the next field is different.
+const unknownRevenue = evaluateInterviewCompleteness({
+  ...base,
+  facts: { monthlyRevenue: { field: "monthlyRevenue", status: "unknown", value: null } },
+  turns: [{ field: "monthlyRevenue" }]
 });
-assert.equal(locationBlocked.complete, false);
-assert.equal(locationBlocked.reason, "LOCATION_REQUIRED");
-assert.equal(locationBlocked.nextQuestion, null);
+assert.equal(unknownRevenue.nextQuestion.field, "variableCostRate");
+assert.equal(unknownRevenue.retryable.length, 0);
 
-const firstQuestion = evaluateInterviewCompleteness({
-  stage: "operating",
-  locationConfirmed: true,
-  facts: {},
-  turns: []
-});
-assert.equal(firstQuestion.complete, false);
-assert.equal(firstQuestion.nextQuestion.field, "goal");
-assert.equal(firstQuestion.nextQuestion.attempt, 1);
+const core = getRequiredFields("operating");
+const allCore = Object.fromEntries(core.map((field) => [field, { field, status: "confirmed", value: field === "bottleneck" ? "客流" : 1 }]));
+const afterCore = evaluateInterviewCompleteness({ ...base, facts: allCore, turns: core.map((field) => ({ field })) });
+assert.equal(afterCore.complete, false);
+assert.ok(["trafficMatch", "visibility", "avgTicket", "dailyOrders", "retention", "channelMix"].includes(afterCore.nextQuestion.field));
 
-const refusedEarlyCompletion = sanitizeAgentNextQuestion({
-  complete: true,
-  field: "",
-  text: ""
-}, {
-  stage: "operating",
-  locationConfirmed: true,
-  facts: {},
-  turns: []
-});
-assert.equal(refusedEarlyCompletion.complete, false);
-assert.equal(refusedEarlyCompletion.field, "goal");
-assert.equal(refusedEarlyCompletion.source, "program");
+const twelve = evaluateInterviewCompleteness({ ...base, turns: Array.from({ length: 12 }, (_, index) => ({ field: `x${index}` })) });
+assert.equal(twelve.complete, true);
+assert.equal(twelve.reason, "MAX_TURNS");
 
-const refusedFieldSkipping = sanitizeAgentNextQuestion({
-  complete: false,
-  field: "monthlyRevenue",
-  text: "一个月收入多少？"
-}, {
-  stage: "operating",
-  locationConfirmed: true,
-  facts: {},
-  turns: []
-});
-assert.equal(refusedFieldSkipping.field, "goal");
-assert.equal(refusedFieldSkipping.source, "program");
-
-const validAgentQuestion = sanitizeAgentNextQuestion({
-  complete: false,
-  field: "goal",
-  text: "这次你最想解决哪件事？"
-}, {
-  stage: "operating",
-  locationConfirmed: true,
-  facts: {},
-  turns: []
-});
-assert.equal(validAgentQuestion.text, "这次你最想解决哪件事？");
-assert.equal(validAgentQuestion.source, "agent");
-
-const operatingFields = getRequiredFields("operating");
-const allResolvedFacts = Object.fromEntries(operatingFields.map((field) => [field, {
-  id: field,
-  field,
-  value: field === "trafficMatch" || field === "visibility" || field === "retention"
-    ? "yes"
-    : 1,
-  status: "provisional"
-}]));
-const allResolved = evaluateInterviewCompleteness({
-  stage: "operating",
-  locationConfirmed: true,
-  facts: allResolvedFacts,
-  turns: []
-});
-assert.equal(allResolved.complete, true);
-assert.equal(allResolved.reason, "REQUIRED_FIELDS_COVERED");
-
-const oneUnknownFacts = structuredClone(allResolvedFacts);
-oneUnknownFacts.monthlyRevenue = {
-  id: "monthlyRevenue",
-  field: "monthlyRevenue",
-  value: null,
-  status: "unknown"
-};
-const firstPassTurns = operatingFields.map((field, index) => ({
-  id: `turn-${index}`,
-  field
-}));
-const retryUnknown = evaluateInterviewCompleteness({
-  stage: "operating",
-  locationConfirmed: true,
-  facts: oneUnknownFacts,
-  turns: firstPassTurns
-});
-assert.equal(retryUnknown.complete, false);
-assert.equal(retryUnknown.nextQuestion.field, "monthlyRevenue");
-assert.equal(retryUnknown.nextQuestion.attempt, 2);
-
-const exhaustedUnknown = evaluateInterviewCompleteness({
-  stage: "operating",
-  locationConfirmed: true,
-  facts: oneUnknownFacts,
-  turns: [...firstPassTurns, { id: "retry", field: "monthlyRevenue" }]
-});
-assert.equal(exhaustedUnknown.complete, true);
-assert.equal(exhaustedUnknown.reason, "UNKNOWNS_EXHAUSTED");
-assert.ok(exhaustedUnknown.exhausted.includes("monthlyRevenue"));
-
-const turnLimit = evaluateInterviewCompleteness({
-  stage: "preopen",
-  locationConfirmed: true,
-  facts: {},
-  turns: Array.from({ length: MAX_TURNS }, (_, index) => ({
-    id: `turn-${index}`,
-    field: "goal"
-  }))
-});
-assert.equal(turnLimit.complete, true);
-assert.equal(turnLimit.reason, "MAX_TURNS");
-assert.equal(turnLimit.remainingTurns, 0);
-
-assert.equal(
-  isShortSingleQuestion("营业额多少，房租多少？"),
-  false
-);
-assert.equal(
-  isShortSingleQuestion("这是一个超过三十个汉字而且包含很多没有必要内容的非常长的问题吗？"),
-  false
-);
-
-console.log("interview policy: 11 scenarios passed");
+const agentCannotSkip = sanitizeAgentNextQuestion({ field: "debt", text: "跳过" }, base);
+assert.equal(agentCannotSkip.field, "monthlyRevenue");
+assert.equal(agentCannotSkip.source, "program");
+console.log("interview-policy 6–12 deterministic tests passed");

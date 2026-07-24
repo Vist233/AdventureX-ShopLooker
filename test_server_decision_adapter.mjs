@@ -49,9 +49,9 @@ assert.ok(stageFromFact.evidence.missingFacts.includes("plannedCommitment"));
 
 const required = getRequiredInterviewFields("preopen");
 assert.ok(required.includes("plannedCommitment"));
-assert.ok(required.includes("trialSale"));
-assert.equal(INTERVIEW_LIMITS.maxTurns, 30);
-assert.equal(INTERVIEW_LIMITS.maxAttemptsPerField, 2);
+assert.ok(required.includes("fixedCostTotal"));
+assert.equal(INTERVIEW_LIMITS.maxTurns, 12);
+assert.equal(INTERVIEW_LIMITS.maxAttemptsPerField, 1);
 
 const interviewState = {
   stage: "preopen",
@@ -61,7 +61,7 @@ const interviewState = {
 };
 const completeness = evaluateInterviewCompleteness(interviewState);
 assert.equal(completeness.complete, false);
-assert.equal(completeness.nextQuestion.field, "goal");
+assert.equal(completeness.nextQuestion.field, "plannedCommitment");
 assert.equal(
   sanitizeAgentNextQuestion({ complete: true }, interviewState).complete,
   false

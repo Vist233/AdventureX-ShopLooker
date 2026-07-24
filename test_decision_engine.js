@@ -265,7 +265,7 @@ const unknownOwnerResult = assessServerCase({
 assert.equal(unknownOwnerResult.decision, "EVIDENCE");
 assert.equal(unknownOwnerResult.metrics.fixedCosts, null);
 assert.equal(unknownOwnerResult.metrics.monthlyProfit, null);
-assert.ok(unknownOwnerResult.evidence.missingFacts.includes("ownerReplacementWage"));
+assert.ok(unknownOwnerResult.evidence.missingFacts.includes("fixedCostTotal"));
 
 const rangedServerFacts = structuredClone(serverFacts);
 rangedServerFacts.monthlyRevenue = {

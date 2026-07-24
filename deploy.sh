@@ -9,6 +9,7 @@ pyenv shell Agent
 
 for source_file in \
   app.js \
+  ranking.js \
   decision-engine.js \
   fact-store.js \
   interview-policy.js \

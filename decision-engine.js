@@ -58,7 +58,7 @@
       return value;
     };
 
-    return {
+    const normalized = {
       ...rawInput,
       _factMode: factMode,
       _factVersion: rawInput._factVersion ?? null,
@@ -72,6 +72,7 @@
       retention: knownAnswer(rawInput.retention) ? rawInput.retention : "unknown",
       monthlyRevenue: number("monthlyRevenue", { min: 0 }),
       variableCostRate: number("variableCostRate", { min: 1, max: 95 }),
+      fixedCostTotal: number("fixedCostTotal", { min: 0 }),
       rent: number("rent", { min: 0 }),
       labor: number("labor", { min: 0 }),
       ownerReplacementWage: number("ownerReplacementWage", { min: 0 }),
@@ -82,32 +83,22 @@
       debt: number("debt", { min: 0 }),
       known: known || {}
     };
+    // Backward-compatible programmatic inputs may provide a cost breakdown;
+    // the new interview stores one total so owners are not asked four times.
+    if (normalized.fixedCostTotal === null && !factMode) {
+      const parts = [normalized.rent, normalized.labor, normalized.otherFixed];
+      if (parts.every((value) => value !== null)) {
+        normalized.fixedCostTotal = parts.reduce((sum, value) => sum + value, 0) + (normalized.ownerReplacementWage || 0);
+      }
+    }
+    return normalized;
   }
 
   function requiredNumericFields(input) {
-    const required = input.stage === "operating"
-      ? [
-        "monthlyRevenue",
-        "variableCostRate",
-        "rent",
-        "labor",
-        "otherFixed",
-        "cashReserve",
-        "avgTicket",
-        "debt"
-      ]
-      : [
-        "variableCostRate",
-        "rent",
-        "labor",
-        "otherFixed",
-        "cashReserve",
-        "avgTicket",
-        "plannedCommitment",
-        "debt"
-      ];
-    if (input._factMode) required.push("ownerReplacementWage");
-    return required;
+    if (input.stage === "preopen") {
+      return ["plannedCommitment", "cashReserve", "debt", "fixedCostTotal", "variableCostRate"];
+    }
+    return ["monthlyRevenue", "variableCostRate", "fixedCostTotal", "cashReserve", "debt"];
   }
 
   function factWeight(input, key) {
@@ -170,13 +161,17 @@
     const grossMargin = input.variableCostRate === null
       ? null
       : 1 - input.variableCostRate / 100;
-    const baseFixedCosts = addIfKnown([input.rent, input.labor, input.otherFixed]);
+    const baseFixedCosts = input.fixedCostTotal !== null && input.fixedCostTotal !== undefined
+      ? input.fixedCostTotal
+      : addIfKnown([input.rent, input.labor, input.otherFixed]);
     const ownerLaborCost = input._factMode
       ? input.ownerReplacementWage
       : input.ownerReplacementWage ?? 0;
-    const fixedCosts = baseFixedCosts === null || ownerLaborCost === null
-      ? null
-      : baseFixedCosts + ownerLaborCost;
+    const fixedCosts = input.fixedCostTotal !== null && input.fixedCostTotal !== undefined
+      ? input.fixedCostTotal
+      : baseFixedCosts === null || ownerLaborCost === null
+        ? null
+        : baseFixedCosts + ownerLaborCost;
     const breakEvenMonthly = grossMargin !== null && grossMargin > 0 && fixedCosts !== null
       ? fixedCosts / grossMargin
       : null;
@@ -229,35 +224,13 @@
     };
     const dependencies = {
       grossMargin: ["variableCostRate"],
-      fixedCosts: input._factMode
-        ? ["rent", "labor", "ownerReplacementWage", "otherFixed"]
-        : ["rent", "labor", "otherFixed"],
-      breakEvenMonthly: input._factMode
-        ? ["variableCostRate", "rent", "labor", "ownerReplacementWage", "otherFixed"]
-        : ["variableCostRate", "rent", "labor", "otherFixed"],
-      breakEvenDaily: input._factMode
-        ? ["variableCostRate", "rent", "labor", "ownerReplacementWage", "otherFixed"]
-        : ["variableCostRate", "rent", "labor", "otherFixed"],
-      breakEvenOrders: input._factMode
-        ? ["variableCostRate", "rent", "labor", "ownerReplacementWage", "otherFixed", "avgTicket"]
-        : ["variableCostRate", "rent", "labor", "otherFixed", "avgTicket"],
-      monthlyProfit: input._factMode
-        ? ["monthlyRevenue", "variableCostRate", "rent", "labor", "ownerReplacementWage", "otherFixed"]
-        : ["monthlyRevenue", "variableCostRate", "rent", "labor", "otherFixed"],
-      coverage: input._factMode
-        ? ["monthlyRevenue", "variableCostRate", "rent", "labor", "ownerReplacementWage", "otherFixed"]
-        : ["monthlyRevenue", "variableCostRate", "rent", "labor", "otherFixed"],
-      runway: input._factMode
-        ? [
-          "monthlyRevenue",
-          "variableCostRate",
-          "rent",
-          "labor",
-          "ownerReplacementWage",
-          "otherFixed",
-          "cashReserve"
-        ]
-        : ["monthlyRevenue", "variableCostRate", "rent", "labor", "otherFixed", "cashReserve"],
+      fixedCosts: ["fixedCostTotal"],
+      breakEvenMonthly: ["variableCostRate", "fixedCostTotal"],
+      breakEvenDaily: ["variableCostRate", "fixedCostTotal"],
+      breakEvenOrders: ["variableCostRate", "fixedCostTotal", "avgTicket"],
+      monthlyProfit: ["monthlyRevenue", "variableCostRate", "fixedCostTotal"],
+      coverage: ["monthlyRevenue", "variableCostRate", "fixedCostTotal"],
+      runway: ["monthlyRevenue", "variableCostRate", "fixedCostTotal", "cashReserve"],
       commitmentRatio: input.stage === "preopen"
         ? ["plannedCommitment", "debt", "cashReserve"]
         : ["debt", "cashReserve"],
