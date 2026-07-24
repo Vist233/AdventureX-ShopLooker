@@ -1237,9 +1237,11 @@ async function interviewTurn(request, env, caseId) {
       createdAt: nowIso()
     };
     working.turns.push(committedTurn);
-    working.currentQuestion = processed.mode === "deterministic-fallback" && !processed.facts.length
-      ? nextQuestion(working)
-      : processed.nextQuestion;
+    // Always derive the next question from the committed state (merged facts +
+    // appended turn). processInterviewTurn may have produced its proposal from
+    // a pre-commit snapshot when the extraction model timed out or errored,
+    // which re-served the question that was just answered.
+    working.currentQuestion = nextQuestion(working);
     working.version = expectedVersion + 1;
     working.updatedAt = nowIso();
     working.latestRunId = null;

@@ -308,6 +308,8 @@ async function fetchJson(url, options = {}, timeoutMs = 8000) {
       const error = new Error(data.message || `请求失败（${response.status}）`);
       error.status = response.status;
       error.code = data.code;
+      if (Number.isInteger(data.version)) error.caseVersion = data.version;
+      if (data.nextQuestion) error.nextQuestion = data.nextQuestion;
       throw error;
     }
     return data;
@@ -857,6 +859,25 @@ async function submitRemoteTurn(transcript, snapshot = {}) {
     ) return;
     if (state.interview.finishRequested) {
       completeInterview();
+      return;
+    }
+    if (
+      (error?.code === "CASE_VERSION_CONFLICT" || error?.code === "TURN_CONFLICT")
+      && error.nextQuestion
+      && !error.nextQuestion.complete
+    ) {
+      // The case moved on without this submission (e.g. an earlier turn did
+      // commit but its response was lost). Adopt the server's latest question
+      // instead of retrying forever against a stale version.
+      if (Number.isInteger(error.caseVersion)) state.caseVersion = error.caseVersion;
+      const latest = error.nextQuestion;
+      $("interviewNotice").textContent = "已同步到最新进度，这一题请再回答一次。";
+      askQuestion({
+        id: latest.field || latest.id,
+        text: latest.text,
+        kind: latest.kind || "text",
+        label: latest.label
+      }, state.interview.questionIndex + 1);
       return;
     }
     retryCurrentTurn(transcript, error);

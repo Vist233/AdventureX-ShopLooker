@@ -16,11 +16,16 @@ const originalFetch = globalThis.fetch;
 const upstreamCalls = [];
 let stepfunActive = 0;
 let stepfunMaxActive = 0;
+let stepfunFailuresRemaining = 0;
 
 globalThis.fetch = async (input, init = {}) => {
   const url = new URL(input);
   upstreamCalls.push({ url, init });
   if (url.hostname === "api.stepfun.com") {
+    if (stepfunFailuresRemaining > 0) {
+      stepfunFailuresRemaining -= 1;
+      throw new Error("模拟抽取模型网络故障");
+    }
     stepfunActive += 1;
     stepfunMaxActive = Math.max(stepfunMaxActive, stepfunActive);
     await new Promise((resolve) => setTimeout(resolve, 15));
@@ -430,6 +435,72 @@ try {
   });
   assert.equal(invalidTurnVersionResponse.status, 422);
   assert.equal((await invalidTurnVersionResponse.json()).code, "CASE_VERSION_INVALID");
+
+  // Regression: when the extraction model times out or errors, the server must
+  // commit the deterministic answer and advance to the next question instead of
+  // re-serving the one that was just answered.
+  env.STEPFUN_API_KEY = "stepfun-test-key";
+  stepfunFailuresRemaining = 10;
+  const llmFailCaseResponse = await apiRequest("/api/cases", {
+    method: "POST",
+    body: { stage: "operating" }
+  });
+  const llmFailCase = await llmFailCaseResponse.json();
+  const llmFailLocationResponse = await apiRequest(`/api/cases/${llmFailCase.case.id}/location`, {
+    method: "POST",
+    token: llmFailCase.caseToken,
+    body: {
+      confirmed: true,
+      context: { location: { address: "上海市黄浦区模型故障测试1号" } }
+    }
+  });
+  const llmFailLocation = await llmFailLocationResponse.json();
+  assert.equal(llmFailLocation.firstQuestion.field, "monthlyRevenue");
+  const llmFailTurnResponse = await apiRequest(`/api/cases/${llmFailCase.case.id}/turns`, {
+    method: "POST",
+    token: llmFailCase.caseToken,
+    body: {
+      turnId: "turn-llm-fail-1",
+      transcript: "一个月大约10万元",
+      caseVersion: llmFailLocation.version
+    }
+  });
+  assert.equal(llmFailTurnResponse.status, 200);
+  const llmFailTurn = await llmFailTurnResponse.json();
+  assert.equal(llmFailTurn.mode, "deterministic-fallback");
+  assert.ok(llmFailTurn.warning);
+  assert.notEqual(llmFailTurn.nextQuestion.field, "monthlyRevenue");
+  assert.equal(llmFailTurn.nextQuestion.field, "variableCostRate");
+  const preservedRevenue = llmFailTurn.extractedFacts.find((fact) => fact.field === "monthlyRevenue");
+  assert.equal(preservedRevenue.value, 100000);
+  const llmFailSecondTurnResponse = await apiRequest(`/api/cases/${llmFailCase.case.id}/turns`, {
+    method: "POST",
+    token: llmFailCase.caseToken,
+    body: {
+      turnId: "turn-llm-fail-2",
+      transcript: "每收一百元大约花45元",
+      caseVersion: llmFailTurn.version
+    }
+  });
+  assert.equal(llmFailSecondTurnResponse.status, 200);
+  const llmFailSecondTurn = await llmFailSecondTurnResponse.json();
+  assert.equal(llmFailSecondTurn.nextQuestion.field, "fixedCostTotal");
+  // Once the model recovers, the same deterministic program keeps advancing.
+  stepfunFailuresRemaining = 0;
+  const recoveredTurnResponse = await apiRequest(`/api/cases/${llmFailCase.case.id}/turns`, {
+    method: "POST",
+    token: llmFailCase.caseToken,
+    body: {
+      turnId: "turn-llm-fail-3",
+      transcript: "每月固定支出5万元",
+      caseVersion: llmFailSecondTurn.version
+    }
+  });
+  assert.equal(recoveredTurnResponse.status, 200);
+  const recoveredTurn = await recoveredTurnResponse.json();
+  assert.equal(recoveredTurn.mode, "stepfun");
+  assert.equal(recoveredTurn.nextQuestion.field, "cashReserve");
+  delete env.STEPFUN_API_KEY;
 
   const reviewCorrections = [
     {
