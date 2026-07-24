@@ -985,6 +985,29 @@ function canonicalInterviewFacts(rawFacts, { stage, source = "voice", transcript
   }));
 }
 
+function deterministicAnswerFact(field, transcript, stage, source) {
+  const text = String(transcript || "").trim();
+  if (!field || !text) return [];
+  if (/^(不知道|不清楚|不确定|没有数据|unknown)$/i.test(text)) {
+    return canonicalInterviewFacts([{ field, status: "unknown", value: null, evidence: "U" }], { stage, source, transcript: text });
+  }
+  const textFields = new Set(["bottleneck", "growthBottleneck", "channelMix", "leaseRemaining", "targetCustomer"]);
+  const choiceFields = new Set(["trialSale", "trafficMatch", "visibility", "retention", "reversibleInvestment"]);
+  if (textFields.has(field)) return canonicalInterviewFacts([{ field, value: text.slice(0, 100), status: "provisional", evidence: "C" }], { stage, source, transcript: text });
+  if (choiceFields.has(field)) {
+    const value = /(没有|没|不|否)/.test(text) ? "no" : /(有|是|做过|能|可以)/.test(text) ? "yes" : "unknown";
+    return canonicalInterviewFacts([{ field, value, status: value === "unknown" ? "unknown" : "provisional", evidence: value === "unknown" ? "U" : "C" }], { stage, source, transcript: text });
+  }
+  const matched = text.match(/(\d+(?:\.\d+)?)\s*(万|千|百)?/);
+  if (!matched) return [];
+  let value = Number(matched[1]);
+  if (matched[2] === "万") value *= 10000;
+  if (matched[2] === "千") value *= 1000;
+  if (matched[2] === "百") value *= 100;
+  const period = /年|年度/.test(text) ? "year" : /天|日/.test(text) ? "day" : "month";
+  return canonicalInterviewFacts([{ field, value, unit: field === "variableCostRate" ? "%" : "CNY", period, status: "provisional", evidence: "C" }], { stage, source, transcript: text });
+}
+
 async function processInterviewTurn(record, transcript, llm, source = "voice") {
   const attemptedTurn = {
     field: record.currentQuestion?.field || nextQuestion(record).field
@@ -1002,7 +1025,14 @@ async function processInterviewTurn(record, transcript, llm, source = "voice") {
     return { facts, nextQuestion: sanitizeAgentNextQuestion(null, stateAfterTurn), mode: "deterministic-unknown" };
   }
   if (!llm) {
-    return { facts: [], nextQuestion: fallback, mode: "deterministic-fallback" };
+    const facts = deterministicAnswerFact(currentField, transcript, record.stage, source);
+    const mergedFacts = { ...record.facts };
+    for (const fact of facts) mergedFacts[fact.id] = fact;
+    return {
+      facts,
+      nextQuestion: sanitizeAgentNextQuestion(null, interviewPolicyState(record, { facts: mergedFacts, turns: [...record.turns, attemptedTurn] })),
+      mode: "deterministic-fallback"
+    };
   }
   const response = await llm([
     {
@@ -1035,7 +1065,8 @@ async function processInterviewTurn(record, transcript, llm, source = "voice") {
     // policy continues immediately and the review screen catches omissions.
     timeoutMs: 7000
   });
-  const facts = canonicalInterviewFacts(response?.facts, { stage: record.stage, source, transcript }).slice(0, 8);
+  const extracted = canonicalInterviewFacts(response?.facts, { stage: record.stage, source, transcript });
+  const facts = (extracted.length ? extracted : deterministicAnswerFact(currentField, transcript, record.stage, source)).slice(0, 8);
   const mergedFacts = { ...record.facts };
   for (const fact of facts) mergedFacts[fact.id] = fact;
   const stateAfterTurn = interviewPolicyState(record, {
