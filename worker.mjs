@@ -1918,7 +1918,34 @@ async function startAnalysis(request, env, caseId, ctx) {
       }, 429);
     }
     const result = await runSiteReport(record, env, body);
-    return apiJson(request, env, { status: "complete", result });
+    // Persist the selection (confirmed location + chosen category / "我不知道")
+    // and the generated report as a completed run, so this site case is saved to
+    // D1 and can be pulled back later exactly like an interview analysis.
+    const runId = secureId("run");
+    const timestamp = nowIso();
+    const run = {
+      id: runId,
+      caseId: record.id,
+      caseVersion: record.version,
+      status: "completed",
+      progress: { phase: "complete", completed: 1, target: 1 },
+      result,
+      context: null,
+      searchState: null,
+      warning: "",
+      createdAt: timestamp,
+      updatedAt: timestamp
+    };
+    runStore.set(runId, run);
+    record.category = result.category || record.category;
+    record.facts.category = normalizeFact({
+      id: "category", value: result.category, status: "confirmed", source: "user", evidence: "A"
+    }, "user");
+    record.latestRunId = runId;
+    record.updatedAt = timestamp;
+    await persistCase(env, record);
+    await persistRun(env, run);
+    return apiJson(request, env, { status: "complete", runId, result });
   }
   if (body.caseVersion != null && !Number.isInteger(Number(body.caseVersion))) {
     return apiJson(request, env, {

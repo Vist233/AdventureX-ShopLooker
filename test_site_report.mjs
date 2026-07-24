@@ -61,6 +61,12 @@ const emptyEnvironment = [
   assert.equal(result.siteMetrics[0].label, "800米同类竞品");
   assert.ok(result.explanation.caution.includes("现场"), "caution must warn to verify on-site");
   assert.ok(result.narrative.title && result.narrative.body);
+  // Each card renders `mechanism` (why this category fits) as its body, so every
+  // option must carry a non-empty and distinct reason — otherwise the heading
+  // (category) and body would look mismatched / repeated.
+  const reasons = result.topPlans.map((p) => p.mechanism);
+  reasons.forEach((why) => assert.ok(why && why.length > 4, "each recommend card needs a why/mechanism"));
+  assert.equal(new Set(reasons).size, reasons.length, "recommend reasons must be distinct per category");
 }
 
 // 2) feasibility mode: a specific category -> validation steps, feasibility type.
