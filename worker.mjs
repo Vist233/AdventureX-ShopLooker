@@ -278,9 +278,20 @@ async function tencentRequest(path, params, key) {
   return data;
 }
 
+// Environment signal groups scanned in site-report (rich) mode: who lives,
+// works and passes through the block. Kept small to bound Tencent request fan-out.
+const ENVIRONMENT_GROUPS = [
+  { key: "school", label: "学校/大学", keyword: "学校" },
+  { key: "office", label: "写字楼/公司", keyword: "写字楼" },
+  { key: "residential", label: "住宅小区", keyword: "小区" },
+  { key: "transport", label: "地铁/公交", keyword: "地铁站" },
+  { key: "retail", label: "商场/超市", keyword: "商场" }
+];
+
 async function buildContextFromGcj02(lat, lng, category, key, options = {}) {
   if (!validCoordinate(lat, lng)) throw new Error("腾讯地图坐标无效");
   const center = `${lat},${lng}`;
+  const baseKeyword = category && category !== "我不知道" ? category : "餐饮";
   const [reverse, nearby] = await Promise.all([
     tencentRequest("/ws/geocoder/v1/", {
       location: center,
@@ -289,7 +300,7 @@ async function buildContextFromGcj02(lat, lng, category, key, options = {}) {
       output: "json"
     }, key),
     tencentRequest("/ws/place/v1/search", {
-      keyword: category,
+      keyword: baseKeyword,
       boundary: `nearby(${center},800,0)`,
       page_size: 20,
       page_index: 1,
@@ -312,6 +323,33 @@ async function buildContextFromGcj02(lat, lng, category, key, options = {}) {
     distance: Number(poi._distance) || 0
   }));
 
+  // Site-report mode needs a richer read of the surroundings than a single
+  // competitor keyword: who lives / works / passes through here. Each group is
+  // an independent nearby search; failures degrade to an empty group.
+  let environment = [];
+  if (options.rich) {
+    const scans = await Promise.all(ENVIRONMENT_GROUPS.map((group) =>
+      tencentRequest("/ws/place/v1/search", {
+        keyword: group.keyword,
+        boundary: `nearby(${center},1000,0)`,
+        page_size: 10,
+        page_index: 1,
+        orderby: "_distance",
+        output: "json"
+      }, key).then((res) => ({ group, res })).catch(() => ({ group, res: null }))
+    ));
+    environment = scans.map(({ group, res }) => {
+      const places = (res?.data || []).slice(0, 10);
+      return {
+        key: group.key,
+        label: group.label,
+        count: Number(res?.count) || places.length,
+        nearestMeters: places.length ? Number(places[0]._distance) || 0 : null,
+        samples: places.slice(0, 3).map((poi) => cleanText(poi.title, 36)).filter(Boolean)
+      };
+    });
+  }
+
   return {
     context: {
       source: "腾讯位置服务",
@@ -325,12 +363,13 @@ async function buildContextFromGcj02(lat, lng, category, key, options = {}) {
         adcode: cleanText(reverseResult.ad_info?.adcode, 12)
       },
       nearby: {
-        keyword: category,
+        keyword: baseKeyword,
         radiusMeters: 800,
         count: Number(nearby.count) || competitors.length,
         places: competitors
       },
-      landmarks
+      landmarks,
+      environment
     }
   };
 }
@@ -361,7 +400,8 @@ export async function getMapContext(url, env) {
     }
 
     return json(await buildContextFromGcj02(mapLat, mapLng, category, env.TENCENT_MAP_KEY, {
-      mode: "gps"
+      mode: "gps",
+      rich: url.searchParams.get("rich") === "1"
     }));
   } catch (error) {
     return json({
@@ -410,7 +450,8 @@ export async function getAddressContext(url, env) {
 
     return json(await buildContextFromGcj02(lat, lng, category, env.TENCENT_MAP_KEY, {
       mode: "address",
-      fallbackAddress: address
+      fallbackAddress: address,
+      rich: url.searchParams.get("rich") === "1"
     }));
   } catch (error) {
     return json({
@@ -1091,6 +1132,7 @@ async function createCase(request, env) {
     id,
     token,
     stage: cleanText(body.stage, 30),
+    category: cleanText(body.category, 30),
     location: null,
     facts: {},
     turns: [],

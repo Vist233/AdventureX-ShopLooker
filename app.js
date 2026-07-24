@@ -267,7 +267,8 @@ function mapContextToCandidate(data, source) {
     city: location.city || "",
     district: location.district || "",
     nearbyCount: Number.isFinite(nearby.count) ? nearby.count : null,
-    places: [...(nearby.places || []), ...(context.landmarks || [])]
+    places: [...(nearby.places || []), ...(context.landmarks || [])],
+    context
   };
 }
 
@@ -341,20 +342,35 @@ async function fetchJson(url, options = {}, timeoutMs = 8000) {
   }
 }
 
+// Preopen (non-demo) goes straight to a map-driven site report instead of the
+// financial interview, so it needs the richer environment scan.
+function isSiteReportMode() {
+  return !DEMO_MODE && state.stage === "preopen";
+}
+
+// The map scan always needs a real keyword; "我不知道" and empty fall back to a
+// generic food keyword so the nearby search still returns competitors.
+function mapScanCategory() {
+  const value = $("category").value.trim();
+  return !value || value === "我不知道" ? "餐饮" : value;
+}
+
 async function fetchMapContext(latitude, longitude) {
   const params = new URLSearchParams({
     lat: latitude.toFixed(6),
     lng: longitude.toFixed(6),
-    category: $("category").value.trim() || "餐饮"
+    category: mapScanCategory()
   });
+  if (isSiteReportMode()) params.set("rich", "1");
   return fetchJson(`/api/map/context?${params}`);
 }
 
 async function fetchAddressContext(address) {
   const params = new URLSearchParams({
     address,
-    category: $("category").value.trim() || "餐饮"
+    category: mapScanCategory()
   });
+  if (isSiteReportMode()) params.set("rich", "1");
   return fetchJson(`/api/map/address-context?${params}`);
 }
 
@@ -543,12 +559,13 @@ async function createCase() {
     if (!state.caseId) throw new Error("服务端没有返回案卷编号");
     if (!state.caseToken) throw new Error("服务端没有返回案卷令牌");
     state.localMode = false;
-    const located = await fetchJson(`/api/cases/${encodeURIComponent(state.caseId)}/location`, {
-      method: "POST",
-      headers: caseHeaders({ "Content-Type": "application/json" }),
-      body: JSON.stringify({
-        confirmed: true,
-        context: {
+    // Forward the full map context (including the rich environment scan) when we
+    // have it, so a site report can read the surroundings; otherwise fall back
+    // to the minimal shape the interview flow always relied on.
+    const candidateContext = state.locationCandidate?.context;
+    const contextToSend = candidateContext && candidateContext.location?.address
+      ? candidateContext
+      : {
           location: {
             address: state.locationCandidate?.address || "",
             city: state.locationCandidate?.city || "",
@@ -559,7 +576,13 @@ async function createCase() {
             count: state.locationCandidate?.nearbyCount,
             places: state.locationCandidate?.places || []
           }
-        }
+        };
+    const located = await fetchJson(`/api/cases/${encodeURIComponent(state.caseId)}/location`, {
+      method: "POST",
+      headers: caseHeaders({ "Content-Type": "application/json" }),
+      body: JSON.stringify({
+        confirmed: true,
+        context: contextToSend
       })
     }, 5000);
     state.firstQuestion = located.firstQuestion || null;
