@@ -2344,21 +2344,28 @@ function renderAnalysisResult(data) {
   $("result").hidden = false;
   const assessment = data.deterministic || data.assessment || data;
   const metrics = assessment.metrics || {};
-  const decisionLabels = { GO: "可以继续", TEST: "小步验证", STOP: "停止追加", EXIT: "准备退出", EVIDENCE: "小步验证" };
-  $("decisionCode").textContent = decisionLabels[assessment.decision] || "小步验证";
+  const isSite = data.reportMode === "site-map";
+  const decisionLabels = isSite
+    ? { GO: "值得开", TEST: "先小成本验证", STOP: "不建议开", EXIT: "不建议开", EVIDENCE: "先小成本验证" }
+    : { GO: "可以继续", TEST: "小步验证", STOP: "停止追加", EXIT: "准备退出", EVIDENCE: "小步验证" };
+  $("decisionCode").textContent = decisionLabels[assessment.decision] || (isSite ? "先小成本验证" : "小步验证");
   $("decisionTitle").textContent = assessment.title || "先补证据，再做决定";
   $("decisionReason").textContent = assessment.reason || "系统没有获得足够证据形成精确经营结论。";
 
-  const metricCards = [];
-  if (Number.isFinite(metrics.breakEvenDaily)) {
-    metricCards.push(["日保本营业额", `¥${money.format(metrics.breakEvenDaily)}`, Number.isFinite(metrics.breakEvenOrders) ? `约 ${Math.ceil(metrics.breakEvenOrders)} 单/天` : ""]);
+  let metricCards = [];
+  if (isSite && Array.isArray(data.siteMetrics) && data.siteMetrics.length) {
+    metricCards = data.siteMetrics.map((metric) => [metric.label, metric.value, metric.hint || ""]);
+  } else {
+    if (Number.isFinite(metrics.breakEvenDaily)) {
+      metricCards.push(["日保本营业额", `¥${money.format(metrics.breakEvenDaily)}`, Number.isFinite(metrics.breakEvenOrders) ? `约 ${Math.ceil(metrics.breakEvenOrders)} 单/天` : ""]);
+    }
+    if (Number.isFinite(metrics.monthlyProfit)) {
+      metricCards.push(["每月经营结果", `${metrics.monthlyProfit < 0 ? "−" : "+"}¥${money.format(Math.abs(metrics.monthlyProfit))}`, "按保守边界计算"]);
+    }
+    if (metrics.runway === Infinity) metricCards.push(["现金寿命", "正现金流", "按当前口径"]);
+    else if (Number.isFinite(metrics.runway)) metricCards.push(["现金寿命", `${metrics.runway.toFixed(1)} 个月`, "不包含未来新增投入"]);
+    while (metricCards.length < 3) metricCards.push(["仍需确认", "待补数据", "未知不会被当成 0"]);
   }
-  if (Number.isFinite(metrics.monthlyProfit)) {
-    metricCards.push(["每月经营结果", `${metrics.monthlyProfit < 0 ? "−" : "+"}¥${money.format(Math.abs(metrics.monthlyProfit))}`, "按保守边界计算"]);
-  }
-  if (metrics.runway === Infinity) metricCards.push(["现金寿命", "正现金流", "按当前口径"]);
-  else if (Number.isFinite(metrics.runway)) metricCards.push(["现金寿命", `${metrics.runway.toFixed(1)} 个月`, "不包含未来新增投入"]);
-  while (metricCards.length < 3) metricCards.push(["仍需确认", "待补数据", "未知不会被当成 0"]);
   $("resultMetrics").innerHTML = metricCards.slice(0, 3).map(([label, value, hint]) => `
     <article><span>${escapeHtml(label)}</span><strong>${escapeHtml(value)}</strong><small>${escapeHtml(hint)}</small></article>
   `).join("");
@@ -2366,12 +2373,14 @@ function renderAnalysisResult(data) {
   const narrative = data.narrative || data.explanation || {};
   $("narrative").innerHTML = `<h3>${escapeHtml(narrative.title || narrative.headline || "为什么这样判断")}</h3><p>${escapeHtml(narrative.body || narrative.diagnosis || assessment.reason || "")}</p>`;
   renderResultFactEvidence();
-  const plans = (data.topPlans || data.top3 || data.plans || []).slice(0, 2).map(normalizePlan);
+  const plans = (data.topPlans || data.top3 || data.plans || []).slice(0, isSite ? 3 : 2).map(normalizePlan);
   const evidenceTasks = (data.evidence_tasks || []).slice(0, 1).map(normalizePlan);
-  $("candidateCount").textContent = plans.length > 1 ? "主方案 + 已核验备选" : plans.length ? "主方案" : "";
+  $("candidateCount").textContent = isSite
+    ? (data.reportType === "recommend" ? "按客群与竞争排序的 3 个方向" : "落地与验证建议")
+    : (plans.length > 1 ? "主方案 + 已核验备选" : plans.length ? "主方案" : "");
   $("planList").innerHTML = plans.length ? plans.map((plan, index) => `
     <article class="plan-card" data-testid="plan-${index + 1}" data-plan-id="${escapeHtml(plan.id)}">
-      <div class="plan-rank"><span>${index === 0 ? "主方案" : "备选方案"} · ${escapeHtml(plan.bottleneck)}</span></div>
+      <div class="plan-rank"><span>${isSite ? escapeHtml(plan.bottleneck) : `${index === 0 ? "主方案" : "备选方案"} · ${escapeHtml(plan.bottleneck)}`}</span></div>
       <h4>${escapeHtml(plan.title)}</h4>
       <p>${escapeHtml(plan.action)}</p>
       <div class="plan-meta">
@@ -2396,12 +2405,17 @@ function renderAnalysisResult(data) {
   $("planList").querySelectorAll(".plan-detail").forEach((button) => {
     button.addEventListener("click", () => openPlanDetail(plans[Number(button.dataset.planIndex)]));
   });
-  const rejected = data.rejectedReasons || (data.rejected || []).slice(0, 6).map((item) => (
-    item.reasons?.[0] || item.phase || "未通过硬核验"
-  ));
-  $("rejectedReasons").innerHTML = rejected.length
-    ? rejected.map((reason) => `<p>· ${escapeHtml(reason)}</p>`).join("")
-    : "<p>候选方案因证据不足、财务不成立、不可逆或无法测量而被淘汰。</p>";
+  if (isSite) {
+    const caution = data.explanation?.caution || "地图只提供环境证据，正式投入前必须现场核对客群与竞争。";
+    $("rejectedReasons").innerHTML = `<p>· ${escapeHtml(caution)}</p>`;
+  } else {
+    const rejected = data.rejectedReasons || (data.rejected || []).slice(0, 6).map((item) => (
+      item.reasons?.[0] || item.phase || "未通过硬核验"
+    ));
+    $("rejectedReasons").innerHTML = rejected.length
+      ? rejected.map((reason) => `<p>· ${escapeHtml(reason)}</p>`).join("")
+      : "<p>候选方案因证据不足、财务不成立、不可逆或无法测量而被淘汰。</p>";
+  }
   void publishAnonymousCaseIfEligible();
   void loadResultLeaderboard();
 }
