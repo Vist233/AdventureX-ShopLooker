@@ -235,6 +235,9 @@ function applyDefaultJudgeSetup() {
   chooseStage("preopen");
   $("category").value = "我不知道";
   syncCategoryChips();
+  // Pre-fill the default store address so a walk-in user can look it up and
+  // click straight through; using their own location still overrides it.
+  if (!$("manualLocation").value.trim()) $("manualLocation").value = DEFAULT_STORE_ADDRESS;
 }
 
 function configureDemoLanding() {
@@ -356,18 +359,40 @@ async function fetchAddressContext(address) {
 }
 
 async function offerLocationFallback(reason, attempt) {
-  if (attempt !== state.locationAttempt) return;
-  setLocationStatus("notice", `${reason} 请直接输入店铺地址。`);
+  // Any failure to obtain the user's own location (denied / timeout / misclick /
+  // unsupported) drops to a known default store address so a walk-in user can
+  // still click straight through to a report.
+  await useDefaultLocation(reason, attempt);
+}
+
+const DEFAULT_STORE_ADDRESS = "浙江省杭州市余杭区礼贤路湖畔科创中心";
+const DEFAULT_LOCATION_HINT = "由于系统设置而未获取您的地址，所以这里我们使用默认地址";
+
+async function useDefaultLocation(reason, attempt) {
+  if (attempt != null && attempt !== state.locationAttempt) return;
+  $("manualLocation").value = DEFAULT_STORE_ADDRESS;
+  setLocationStatus("notice", `${reason ? reason + " " : ""}${DEFAULT_LOCATION_HINT}。`);
+  let candidate;
   try {
-    const data = await fetchJson("/api/map/ip-location", {}, 4000);
-    if (attempt !== state.locationAttempt) return;
-    const approximate = data.approximate || {};
-    const label = approximate.label || [approximate.city, approximate.district].filter(Boolean).join("");
-    if (!$("manualLocation").value.trim() && label) $("manualLocation").value = `${label} `;
+    const data = await fetchAddressContext(DEFAULT_STORE_ADDRESS);
+    if (attempt != null && attempt !== state.locationAttempt) return;
+    candidate = mapContextToCandidate(data, "default");
   } catch (_) {
-  } finally {
-    $("locateButton").disabled = false;
+    if (attempt != null && attempt !== state.locationAttempt) return;
+    candidate = {
+      source: "default",
+      address: DEFAULT_STORE_ADDRESS,
+      city: "杭州市",
+      district: "余杭区",
+      nearbyCount: null,
+      places: []
+    };
   }
+  state.mapContextLoaded = true;
+  renderMapCandidate(candidate);
+  confirmLocation();
+  setLocationStatus("success", `已为你使用默认地址，可以直接下一步。${DEFAULT_LOCATION_HINT}。`);
+  $("locateButton").disabled = false;
 }
 
 function locateCurrentStore() {
