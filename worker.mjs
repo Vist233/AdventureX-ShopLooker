@@ -2284,6 +2284,11 @@ export function publicDataScore(record) {
   return Math.round((coreScore * .7 + optionalScore * .3) * 100);
 }
 
+const PUBLIC_FACT_LABELS = {
+  variableCostRate: "变动成本率", bottleneck: "当前瓶颈", growthBottleneck: "增长瓶颈",
+  trialSale: "试销情况", trafficMatch: "客流匹配", visibility: "门店可见性", retention: "复购情况"
+};
+
 function safePublicFacts(record) {
   const fields = ["monthlyRevenue", "variableCostRate", "fixedCostTotal", "cashReserve", "debt", "bottleneck", "growthBottleneck", "trialSale", "trafficMatch", "visibility", "retention"];
   return fields.flatMap((field) => {
@@ -2327,12 +2332,41 @@ async function publishCase(request, env, caseId) {
   const id = secureId("public");
   const manageToken = secureId("manage");
   const timestamp = nowIso();
+  const explanation = run?.result?.explanation || {};
+  const rejectedRaw = Array.isArray(run?.result?.rejectedReasons)
+    ? run.result.rejectedReasons
+    : (run?.result?.rejected || []).map((item) => item?.reasons?.[0] || item?.phase).filter(Boolean);
   const snapshot = {
     stage: record.stage,
     category: cleanText(record.facts?.category?.value, 80) || "餐饮",
+    // No location for real user cases: keep anonymised, address is never published.
+    decision: decision.decision,
     conclusion: publicDecisionLabel(decision.decision),
-    signals: safePublicFacts(record),
-    plans: plans.map((plan, index) => ({ role: index === 0 ? "主方案" : "备选方案", title: trimText(plan.title, 120), action: trimText(plan.action, 300), metric: trimText(plan.metric, 80), successLine: trimText(plan.success_line || plan.successLine, 120), stopLine: trimText(plan.stop_line || plan.stopLine, 120) })),
+    statusLine: trimText(explanation.headline || decision.title, 120),
+    decisionTitle: trimText(decision.title, 160),
+    decisionReason: trimText(decision.reason, 500),
+    narrative: {
+      title: trimText(explanation.headline, 120) || "为什么这样判断",
+      body: trimText(explanation.diagnosis || decision.reason, 500)
+    },
+    // Display-ready signals; still excludes raw amounts via safePublicFacts.
+    signals: safePublicFacts(record).map((signal) => ({
+      label: PUBLIC_FACT_LABELS[signal.field] || signal.field,
+      value: signal.range ? `${signal.value}（${signal.range}）` : String(signal.value),
+      status: signal.status
+    })),
+    plans: plans.map((plan, index) => ({
+      role: index === 0 ? "主方案" : "备选方案",
+      bottleneck: trimText(plan.bottleneck, 80),
+      title: trimText(plan.title, 120),
+      action: trimText(plan.action, 300),
+      budgetCap: Number(plan.budget_cap ?? plan.budgetCap) || 0,
+      durationDays: Number(plan.duration_days ?? plan.durationDays) || 0,
+      metric: trimText(plan.metric, 80),
+      successLine: trimText(plan.success_line || plan.successLine, 120),
+      stopLine: trimText(plan.stop_line || plan.stopLine, 120)
+    })),
+    rejectedReasons: rejectedRaw.slice(0, 6).map((reason) => trimText(String(reason), 160)),
     evidenceScore: Number(decision.metrics?.completeness) || dataScore
   };
   const row = { id, sourceCaseId: record.id, manageTokenHash: await tokenHash(manageToken), snapshot, dataScore, outcomeScore: 0, rankScore: Math.round(dataScore * .7), isActive: true, createdAt: timestamp, updatedAt: timestamp };
