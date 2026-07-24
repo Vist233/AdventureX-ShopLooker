@@ -2530,9 +2530,12 @@ if (!DEMO_MODE) setProductView("landing");
 fetch("data/corpus_analysis.json")
   .then((response) => response.ok ? response.json() : Promise.reject())
   .then((data) => {
-    $("heroTitles").textContent = data.archive.manifest_unique_videos;
+    const setStat = (id, value) => { const el = $(id); if (el) el.textContent = value; };
+    setStat("heroTitles", data.archive.manifest_unique_videos);
+    setStat("headerTitles", data.archive.manifest_unique_videos);
     if (Number.isFinite(data.archive.accepted_transcripts)) {
-      $("heroTranscripts").textContent = data.archive.accepted_transcripts;
+      setStat("heroTranscripts", data.archive.accepted_transcripts);
+      setStat("headerTranscripts", data.archive.accepted_transcripts);
     }
   })
   .catch(() => {});

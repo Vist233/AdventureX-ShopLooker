@@ -48,8 +48,8 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, summary:focus
 .brand-mark.small { width: 27px; height: 27px; }
 .topbar-proof { color: rgba(255,255,255,.58); font-size: 12px; }
 .topbar-proof b { color: var(--green); }
-.topbar-ranking { margin-left: auto; color: var(--green); font-size: 12px; font-weight: 800; text-decoration: none; }
-.topbar-ranking + .topbar-proof { margin-left: 20px; }
+.topbar-stat { margin-left: auto; color: rgba(255,255,255,.58); font-size: 12px; font-weight: 700; text-align: right; }
+.topbar-stat b { color: var(--green); font-weight: 850; }
 .ranking-main { max-width: 920px; min-height: calc(100vh - 64px); margin: 0 auto; padding: 80px 24px; }
 .ranking-main h1 { margin: 15px 0; font-size: clamp(46px, 7vw, 82px); line-height: .98; letter-spacing: -.07em; }.ranking-main h1 em { color: var(--green-dark); font-style: normal; }
 .ranking-main > p { max-width: 620px; color: var(--muted); line-height: 1.7; }
