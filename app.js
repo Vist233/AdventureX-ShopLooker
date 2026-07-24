@@ -53,6 +53,8 @@ const state = {
   reviewSubmitted: false,
   audio: null,
   recognition: null,
+  ttsAudio: null,
+  ttsController: null,
   analysisTimer: null,
   demoMode: DEMO_MODE,
   demoPlaybackToken: 0
@@ -734,7 +736,7 @@ function floatSamplesToWav(samples, sampleRate = 16000) {
 }
 
 async function transcribeRecordedAnswer(wavBuffer) {
-  if (!state.interview.active || state.interview.paused) return;
+  if (!state.interview.active || state.interview.paused || state.interview.submitInFlight) return;
   if (!state.caseId || !state.caseToken) {
     state.audio?.stop();
     state.audio = null;
@@ -767,7 +769,7 @@ async function transcribeRecordedAnswer(wavBuffer) {
     });
     const data = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(data.message || `语音识别失败（${response.status}）`);
-    if (!state.interview.active || state.interview.turnId !== snapshot.turnId) return;
+    if (!state.interview.active || state.interview.turnId !== snapshot.turnId || state.interview.submitInFlight) return;
     const transcript = String(data.text || "").trim();
     if (transcript.length < 2) throw new Error("没有识别到有效回答");
     state.interview.transcript = transcript;
@@ -801,7 +803,7 @@ async function submitRemoteTurn(transcript, snapshot = {}) {
   state.interview.submitInFlight = true;
   state.audio?.setSending(false);
   setInterviewBusy(true);
-  setListening("thinking", "");
+  setListening("thinking", "正在整理你的回答");
   try {
     const data = await fetchJson(`/api/cases/${encodeURIComponent(state.caseId)}/turns`, {
       method: "POST",
@@ -895,15 +897,27 @@ function setInterviewBusy(busy) {
 }
 
 async function speakQuestion(text, audioUrl = null) {
+  const turnId = state.interview.turnId;
+  // Late work from a previous turn (or anything resolving while the user is
+  // submitting a manual answer) must never play or re-enable listening.
+  const isStale = () => (
+    state.interview.turnId !== turnId
+    || state.interview.submitInFlight
+    || !state.interview.active
+  );
   state.audio?.setSending(false);
   stopRecognition();
   setListening("", "AI 正在提问");
   if (!audioUrl && !state.localMode && state.caseToken) {
+    state.ttsController?.abort();
+    const controller = new AbortController();
+    state.ttsController = controller;
     try {
       const response = await fetch("/api/tts", {
         method: "POST",
         headers: caseHeaders({ "Content-Type": "application/json" }),
-        body: JSON.stringify({ caseId: state.caseId, text })
+        body: JSON.stringify({ caseId: state.caseId, text }),
+        signal: controller.signal
       });
       if (response.ok && response.status !== 204) {
         const audio = await response.blob();
@@ -913,11 +927,18 @@ async function speakQuestion(text, audioUrl = null) {
       }
     } catch (_) {
       audioUrl = null;
+    } finally {
+      if (state.ttsController === controller) state.ttsController = null;
     }
   }
+  if (isStale()) {
+    if (audioUrl && String(audioUrl).startsWith("blob:")) URL.revokeObjectURL(audioUrl);
+    return;
+  }
   if (audioUrl) {
+    const audio = new Audio(audioUrl);
+    state.ttsAudio = audio;
     try {
-      const audio = new Audio(audioUrl);
       await audio.play();
       await new Promise((resolve) => {
         audio.onended = resolve;
@@ -926,6 +947,7 @@ async function speakQuestion(text, audioUrl = null) {
     } catch (_) {
       // Text remains visible if audio playback is unavailable.
     } finally {
+      if (state.ttsAudio === audio) state.ttsAudio = null;
       if (String(audioUrl).startsWith("blob:")) URL.revokeObjectURL(audioUrl);
     }
   } else if ("speechSynthesis" in window) {
@@ -939,7 +961,7 @@ async function speakQuestion(text, audioUrl = null) {
       window.speechSynthesis.speak(utterance);
     });
   }
-  if (!state.interview.active || state.interview.paused) return;
+  if (state.interview.paused || isStale()) return;
   state.audio?.setSending(state.interview.mode === "dashscope-http");
   setListening("live", "正在听你说话");
   if (state.interview.mode === "local-speech") startRecognition();
@@ -982,9 +1004,7 @@ function goToPreviousQuestion() {
   state.interview.turnController = null;
   state.interview.submitInFlight = false;
   state.interview.pendingQuestion = null;
-  state.audio?.setSending(false);
-  stopRecognition();
-  if ("speechSynthesis" in window) window.speechSynthesis.cancel();
+  stopVoiceIo();
   state.transcripts.pop();
   if (state.interview.progress?.asked > 0) state.interview.progress.asked -= 1;
   askQuestion(previous, prevIndex);
@@ -999,6 +1019,27 @@ function startRecognition() {
 function stopRecognition() {
   if (!state.recognition) return;
   try { state.recognition.stop(); } catch (_) { /* Already stopped. */ }
+}
+
+// Cut every voice input/output channel immediately. Used when the user takes
+// over manually (confirm/previous): in-flight ASR/TTS responses may still
+// arrive but must never reach the UI (guarded by turnId / submitInFlight).
+// Deliberately does NOT abort state.interview.turnController: the answer
+// submission itself must be allowed to finish.
+function stopVoiceIo() {
+  state.interview.asrController?.abort();
+  state.interview.asrController = null;
+  state.audio?.setSending(false);
+  stopRecognition();
+  if ("speechSynthesis" in window) window.speechSynthesis.cancel();
+  state.ttsController?.abort();
+  state.ttsController = null;
+  if (state.ttsAudio) {
+    state.ttsAudio.onended = null;
+    state.ttsAudio.onerror = null;
+    try { state.ttsAudio.pause(); } catch (_) { /* Already stopped. */ }
+    state.ttsAudio = null;
+  }
 }
 
 function setupSpeechRecognition() {
@@ -1336,7 +1377,7 @@ function setAnswerDraft(text, source = "typed") {
 async function confirmAnswerDraft() {
   const text = $("fallbackAnswer").value.trim();
   if (!text || state.interview.submitInFlight || state.interview.busy) return;
-  stopRecognition();
+  stopVoiceIo();
   setInterviewBusy(true);
   const snapshot = {
     turnId: state.interview.turnId,
@@ -2412,11 +2453,9 @@ async function startSelectedPlan(planId, button) {
 
 function resetFlow() {
   clearInterval(state.analysisTimer);
-  state.interview.asrController?.abort();
   state.interview.turnController?.abort();
   state.audio?.stop();
-  stopRecognition();
-  if ("speechSynthesis" in window) window.speechSynthesis.cancel();
+  stopVoiceIo();
   Object.assign(state, {
     panel: "location",
     stage: null,
@@ -2434,6 +2473,8 @@ function resetFlow() {
     reviewSubmitted: false,
     audio: null,
     recognition: null,
+    ttsAudio: null,
+    ttsController: null,
     analysisTimer: null
   });
   state.interview = {
