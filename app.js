@@ -209,10 +209,19 @@ function chooseStage(stage) {
   document.querySelectorAll("[data-stage]").forEach((button) => {
     button.classList.toggle("selected", button.dataset.stage === stage);
   });
-  if (!DEMO_MODE) {
-    $("beginInterview").textContent = stage === "preopen" ? "下一步：生成选址报告" : "开始问诊并持续录音";
-  }
+  if (!DEMO_MODE) applyStageContext(stage);
   updateBeginState();
+}
+
+// Everything that changes with the chosen stage in the real (non-demo) judge
+// flow lives here so switching stages stays consistent.
+function applyStageContext(stage) {
+  const isPreopen = stage === "preopen";
+  $("beginInterview").textContent = isPreopen ? "下一步：生成选址报告" : "开始问诊并持续录音";
+  // The Yuncheng Xiaowancai demo is a real operating store, so it only makes
+  // sense as a shortcut for "已经营业" / "有利润，想增长", never for preopen.
+  const demoLink = $("panelDemoLink");
+  if (demoLink) demoLink.hidden = isPreopen;
 }
 
 function syncCategoryChips() {
