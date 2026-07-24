@@ -96,24 +96,22 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, summary:focus
 .hero-result strong { display: block; margin: 18px 0 10px; color: var(--green); font-size: clamp(34px, 4vw, 54px); letter-spacing: -.055em; }
 .hero-result p { color: rgba(255,255,255,.67); line-height: 1.7; }
 .hero-result span { display: block; margin-top: 22px; padding-top: 17px; border-top: 1px solid rgba(255,255,255,.13); font-size: 12px; }
-.hero-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 11px; }
-.demo-button { min-height: 50px; padding: 0 17px; display: inline-flex; align-items: center; gap: 8px; color: rgba(255,255,255,.88); border: 1px solid rgba(255,255,255,.3); border-radius: 6px; font-weight: 800; text-decoration: none; }
+.hero-actions { display: flex; flex-wrap: wrap; align-items: stretch; gap: 10px; max-width: 620px; }
+.hero-actions .primary-button { flex: 1 1 0; min-height: 52px; border-radius: 8px; }
+.demo-button { flex: 1 1 0; min-height: 52px; padding: 0 17px; display: inline-flex; align-items: center; justify-content: center; gap: 8px; color: rgba(255,255,255,.88); border: 1px solid rgba(255,255,255,.3); border-radius: 8px; font-weight: 800; text-decoration: none; }
 .demo-button span { color: var(--green); font-size: 18px; }
 .demo-button:hover { color: white; border-color: var(--green); }
-.ranking-button { flex: 1 1 100%; min-height: 50px; margin-top: 3px; padding: 0 18px; display: inline-flex; align-items: center; justify-content: center; gap: 9px; color: white; background: rgba(207,255,61,.1); border: 1px solid rgba(207,255,61,.42); border-radius: 8px; font-weight: 780; text-decoration: none; }
+.ranking-button { flex: 1 1 100%; min-height: 52px; padding: 0 18px; display: inline-flex; align-items: center; justify-content: center; gap: 9px; color: white; background: rgba(207,255,61,.1); border: 1px solid rgba(207,255,61,.42); border-radius: 8px; font-weight: 780; text-decoration: none; }
 .ranking-button b { color: var(--green); font-weight: 850; }
 .ranking-button span { color: var(--green); font-size: 18px; }
 .ranking-button:hover { background: rgba(207,255,61,.18); border-color: var(--green); }
 
-.market-signal { display: grid; gap: 8px; align-self: stretch; align-content: center; }
+.market-signal { display: grid; gap: 12px; align-self: stretch; align-content: center; }
 .market-card { padding: 20px 22px; border: 1px solid rgba(255,255,255,.18); border-radius: 10px; background: rgba(255,255,255,.055); }
 .market-card span, .market-card strong, .market-card p { display: block; }
 .market-card span { color: rgba(255,255,255,.48); font-size: 11px; }
 .market-card strong { margin: 7px 0 5px; color: var(--green); font-size: clamp(29px, 3.3vw, 47px); line-height: 1; letter-spacing: -.055em; }
 .market-card p { margin: 0; color: rgba(255,255,255,.74); font-size: 12px; }
-.market-scale { margin-right: 36px; }
-.market-closure { margin-left: 18px; }
-.market-early { margin-right: 62px; border-color: rgba(207,255,61,.48); }
 .market-arrow { margin: 2px 0 2px 18px; color: rgba(255,255,255,.42); font-size: 11px; }
 .landing-section { padding: 108px clamp(20px, 7vw, 108px); }
 .landing-section-heading { max-width: 790px; margin-bottom: 42px; }
