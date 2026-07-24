@@ -137,7 +137,7 @@ const DEMO_CASE = {
     ["avgTicket", "这个没有专门算过。"],
     ["variableCostRate", "毛利大约百分之四十五，所以变动成本大约百分之五十五。"],
     ["rent", "房租一年两万七，不是一个月。"],
-    ["labor", "人工一个月一万八到一万九。"],
+    ["labor", "人工一个月一万九。"],
     ["ownerReplacementWage", "我不知道，没单独算老板和家人的工资。"],
     ["staffCount", "六个长期员工，还有两个小时工。"],
     ["otherFixed", "水电气一个月大约一万。"],
@@ -1818,7 +1818,7 @@ function demoAnalysisResult() {
     },
     narrative: {
       title: "先看高峰承接，不先扩店",
-      body: "这家山西运城稷山县的私房小碗菜店：日收约 4000、毛利约 45%、年租 2.7 万、人工约 1.8—1.9 万、水电气约 1 万，同时反映座位不够、外卖只能随机搭配。先用低成本实验验证座位周转和固定套餐，而不是立刻追加装修或人员。"
+      body: "这家山西运城稷山县的私房小碗菜店：日收约 4000、毛利约 45%、年租 2.7 万、人工约 1.9 万、水电气约 1 万，同时反映座位不够、外卖只能随机搭配。先用低成本实验验证座位周转和固定套餐，而不是立刻追加装修或人员。"
     },
     candidateCount: 3,
     verified: 3,
@@ -2523,5 +2523,8 @@ fetch("data/corpus_analysis.json")
   .then((response) => response.ok ? response.json() : Promise.reject())
   .then((data) => {
     $("heroTitles").textContent = data.archive.manifest_unique_videos;
+    if (Number.isFinite(data.archive.accepted_transcripts)) {
+      $("heroTranscripts").textContent = data.archive.accepted_transcripts;
+    }
   })
   .catch(() => {});

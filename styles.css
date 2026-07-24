@@ -100,6 +100,10 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, summary:focus
 .demo-button { min-height: 50px; padding: 0 17px; display: inline-flex; align-items: center; gap: 8px; color: rgba(255,255,255,.88); border: 1px solid rgba(255,255,255,.3); border-radius: 6px; font-weight: 800; text-decoration: none; }
 .demo-button span { color: var(--green); font-size: 18px; }
 .demo-button:hover { color: white; border-color: var(--green); }
+.ranking-button { flex: 1 1 100%; min-height: 50px; margin-top: 3px; padding: 0 18px; display: inline-flex; align-items: center; justify-content: center; gap: 9px; color: white; background: rgba(207,255,61,.1); border: 1px solid rgba(207,255,61,.42); border-radius: 8px; font-weight: 780; text-decoration: none; }
+.ranking-button b { color: var(--green); font-weight: 850; }
+.ranking-button span { color: var(--green); font-size: 18px; }
+.ranking-button:hover { background: rgba(207,255,61,.18); border-color: var(--green); }
 
 .market-signal { display: grid; gap: 8px; align-self: stretch; align-content: center; }
 .market-card { padding: 20px 22px; border: 1px solid rgba(255,255,255,.18); border-radius: 10px; background: rgba(255,255,255,.055); }
