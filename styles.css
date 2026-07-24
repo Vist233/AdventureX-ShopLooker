@@ -292,6 +292,9 @@ body.demo-mode .fact-review-row.demo-tapped { animation: demoTap .28s ease-out; 
 .listening-pill i { width: 9px; height: 9px; background: var(--amber); border-radius: 50%; }
 .listening-pill.live i { background: var(--green); box-shadow: 0 0 0 7px rgba(207,255,61,.08); animation: pulse 1.2s infinite; }
 .listening-pill.paused i { background: #999; animation: none; }
+.listening-pill.thinking i { background: var(--amber); animation: pulse 1s infinite; }
+.interview-panel .secondary-button:disabled { opacity: .35; cursor: not-allowed; }
+.text-fallback textarea:disabled { opacity: .5; cursor: not-allowed; }
 .question-stage { min-height: 190px; padding: 42px 0 28px; display: flex; flex-direction: column; justify-content: center; }
 .question-stage small { color: var(--green); font: 750 11px ui-monospace, monospace; }
 .question-stage h3 { max-width: 760px; margin: 16px 0 12px; font-size: clamp(34px, 5vw, 57px); line-height: 1.15; letter-spacing: -.05em; }

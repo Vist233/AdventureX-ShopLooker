@@ -41,6 +41,7 @@ const state = {
     progress: { asked: 0, coreTarget: 6, maxTurns: 12 },
     noSpeechCount: 0,
     submitInFlight: false,
+    busy: false,
     asrController: null,
     turnController: null,
     finishRequested: false,
@@ -799,7 +800,8 @@ async function submitRemoteTurn(transcript, snapshot = {}) {
   state.interview.turnController = controller;
   state.interview.submitInFlight = true;
   state.audio?.setSending(false);
-  setListening("", "正在整理答案");
+  setInterviewBusy(true);
+  setListening("thinking", "");
   try {
     const data = await fetchJson(`/api/cases/${encodeURIComponent(state.caseId)}/turns`, {
       method: "POST",
@@ -813,7 +815,7 @@ async function submitRemoteTurn(transcript, snapshot = {}) {
         expectedVersion: snapshot.caseVersion ?? state.caseVersion
       }),
       signal: controller.signal
-    }, 12000);
+    }, 30000);
     if (
       controller.signal.aborted
       || state.interview.turnController !== controller
@@ -847,8 +849,7 @@ async function submitRemoteTurn(transcript, snapshot = {}) {
     }
   } catch (error) {
     if (
-      error?.name === "AbortError"
-      || controller.signal.aborted
+      controller.signal.aborted
       || state.interview.turnController !== controller
       || !state.interview.active
     ) return;
@@ -856,7 +857,7 @@ async function submitRemoteTurn(transcript, snapshot = {}) {
       completeInterview();
       return;
     }
-    activateLocalFallback(`答案已保留，但云端追问失败：${error.message}`);
+    retryCurrentTurn(transcript, error);
   } finally {
     if (state.interview.turnController === controller) {
       state.interview.turnController = null;
@@ -865,9 +866,34 @@ async function submitRemoteTurn(transcript, snapshot = {}) {
   }
 }
 
+function retryCurrentTurn(transcript, error) {
+  state.interview.submitInFlight = false;
+  state.interview.turnController = null;
+  setInterviewBusy(false);
+  if (transcript && $("fallbackAnswer").value.trim() !== transcript) {
+    $("fallbackAnswer").value = transcript;
+  }
+  const detail = error?.message ? `：${error.message}` : "";
+  $("interviewNotice").textContent = `网络有点慢，这一题的答案已保留，请再点一次“确认并下一题”重试${detail}`;
+  setListening("paused", "请重试这一题");
+  $("fallbackAnswer").focus();
+}
+
 function setListening(mode, label) {
   $("listeningPill").className = `listening-pill ${mode}`;
   $("listeningLabel").textContent = label;
+}
+
+function setInterviewBusy(busy) {
+  state.interview.busy = Boolean(busy);
+  const confirm = $("confirmAnswer");
+  const previous = $("previousQuestion");
+  const preset = $("fillPresetAnswers");
+  const answer = $("fallbackAnswer");
+  if (confirm) confirm.disabled = busy;
+  if (previous) previous.disabled = busy || state.interview.questionIndex <= 0;
+  if (preset) preset.disabled = busy;
+  if (answer) answer.disabled = busy;
 }
 
 async function speakQuestion(text, audioUrl = null) {
@@ -942,7 +968,8 @@ function askQuestion(question, index = null) {
   $("currentQuestion").dataset.factKind = question.kind || "text";
   $("currentQuestion").dataset.factLabel = question.label || FACT_LABELS[question.id] || "事实";
   const current = Math.max(1, state.interview.questionIndex + 1);
-  $("questionProgress").textContent = `第 ${current} / ${state.interview.progress?.coreTarget || 6}-${state.interview.progress?.maxTurns || 12}`;
+  $("questionProgress").textContent = `第 ${current} / ${state.interview.progress?.maxTurns || 12}`;
+  setInterviewBusy(false);
   void speakQuestion(question.text, question.audioUrl);
 }
 
@@ -1303,8 +1330,9 @@ function setAnswerDraft(text, source = "typed") {
 
 async function confirmAnswerDraft() {
   const text = $("fallbackAnswer").value.trim();
-  if (!text || state.interview.submitInFlight) return;
+  if (!text || state.interview.submitInFlight || state.interview.busy) return;
   stopRecognition();
+  setInterviewBusy(true);
   const snapshot = {
     turnId: state.interview.turnId,
     questionId: $("currentQuestion").dataset.factId,
@@ -1345,6 +1373,7 @@ function completeInterview() {
   state.interview.complete = true;
   state.interview.finishRequested = false;
   state.interview.pendingQuestion = null;
+  setInterviewBusy(false);
   state.audio?.setSending(false);
   stopRecognition();
   if ("speechSynthesis" in window) window.speechSynthesis.cancel();
@@ -2267,7 +2296,7 @@ function resetFlow() {
     turnId: null, mode: "pending", transcript: "", draft: "", draftEdited: false, draftSource: "",
     voiceBase: "",
     progress: { asked: 0, coreTarget: 6, maxTurns: 12 }, noSpeechCount: 0,
-    submitInFlight: false, asrController: null, turnController: null,
+    submitInFlight: false, busy: false, asrController: null, turnController: null,
     finishRequested: false, pendingQuestion: null, history: []
   };
   document.querySelectorAll("[data-stage]").forEach((button) => button.classList.remove("selected"));
