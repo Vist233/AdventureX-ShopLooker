@@ -2365,7 +2365,11 @@ $("planDetailDialog").addEventListener("click", (event) => {
 });
 document.querySelector("[data-testid=hero-start]").addEventListener("click", (event) => {
   event.preventDefault();
-  enterWorkspace();
+  if (DEMO_MODE) {
+    enterWorkspace();
+    return;
+  }
+  $("judge").scrollIntoView({ behavior: "smooth", block: "start" });
 });
 document.querySelector(".brand").addEventListener("click", (event) => {
   if (DEMO_MODE) return;

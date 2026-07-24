@@ -111,9 +111,6 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, summary:focus
 .market-closure { margin-left: 18px; }
 .market-early { margin-right: 62px; border-color: rgba(207,255,61,.48); }
 .market-arrow { margin: 2px 0 2px 18px; color: rgba(255,255,255,.42); font-size: 11px; }
-.landing-conclusion { padding: 28px clamp(20px, 7vw, 108px); display: flex; align-items: baseline; justify-content: space-between; gap: 35px; color: white; background: var(--green-dark); }
-.landing-conclusion p { margin: 0; color: rgba(255,255,255,.68); }
-.landing-conclusion strong { max-width: 480px; font-size: 18px; }
 .landing-section { padding: 108px clamp(20px, 7vw, 108px); }
 .landing-section-heading { max-width: 790px; margin-bottom: 42px; }
 .landing-section-heading h2 { margin: 13px 0 16px; font-size: clamp(38px, 5.2vw, 72px); line-height: 1.04; letter-spacing: -.06em; }
@@ -147,7 +144,22 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, summary:focus
 .source-note { padding: 24px clamp(20px, 7vw, 108px) 40px; color: var(--muted); background: var(--paper); border-top: 1px solid var(--line); font-size: 11px; line-height: 1.65; }
 .source-note p { max-width: 980px; margin: 0 0 7px; }
 
-body[data-product-view="landing"] .judge { display: none; }
+/* Landing 采用整屏翻页：hero / 事实错位 / 勇哥需求 / 探店第一步，各占一页，一翻一块。 */
+html:has(body[data-product-view="landing"]) { scroll-snap-type: y proximity; scroll-padding-top: 64px; }
+body[data-product-view="landing"] .hero,
+body[data-product-view="landing"] .fact-error-section,
+body[data-product-view="landing"] .yongge-section,
+body[data-product-view="landing"] .judge {
+  min-height: 100vh;
+  scroll-snap-align: start;
+}
+body[data-product-view="landing"] .fact-error-section,
+body[data-product-view="landing"] .yongge-section,
+body[data-product-view="landing"] .judge {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
 body[data-product-view="workspace"] [data-landing], body[data-product-view="result"] [data-landing] { display: none !important; }
 body[data-product-view="workspace"] .judge { min-height: calc(100vh - 64px); padding-top: 58px; }
 body[data-product-view="result"] .judge { max-width: 1180px; min-height: calc(100vh - 64px); margin: 0 auto; padding: 48px 24px 96px; }
@@ -434,7 +446,6 @@ footer > span { text-align: right; }
   .hero { padding: 62px 18px 55px; }
   .hero h1 { font-size: 52px; }
   .market-scale, .market-closure, .market-early { margin-right: 0; margin-left: 0; }
-  .landing-conclusion { align-items: flex-start; flex-direction: column; gap: 10px; }
   .landing-section { padding: 72px 18px; }
   .landing-section-heading h2 { font-size: 39px; }
   .fact-checks dl > div { grid-template-columns: 1fr; gap: 4px; }
