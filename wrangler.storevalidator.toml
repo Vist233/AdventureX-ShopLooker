@@ -7,6 +7,10 @@ main = "storevalidator-worker.mjs"
 pattern = "storevalidator.zhangyvjing.com"
 custom_domain = true
 
+[[routes]]
+pattern = "demo.storevalidator.zhangyvjing.com"
+custom_domain = true
+
 [assets]
 directory = "./dist"
 binding = "ASSETS"

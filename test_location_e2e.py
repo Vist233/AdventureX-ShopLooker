@@ -520,6 +520,7 @@ def test_subtitle_case_demo(browser, base_url: str) -> None:
     expect(page.locator("#mapAddress")).to_contain_text("稷山县")
     page.locator("#beginInterview").click()
     expect(page.locator('[data-panel="review"]')).to_be_visible(timeout=12_000)
+    expect(page.locator(".review-receipt-meta")).to_contain_text("事实核对单")
     rows = page.locator('[data-testid="fact-review-row"]')
     expect(rows).to_have_count(19)
     first_row = rows.first

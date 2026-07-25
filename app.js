@@ -7,8 +7,8 @@ const FLOW_ORDER = ["location", "interview", "review", "result"];
 const LOCAL_VAD_SILENCE_MS = 350;
 const LOCAL_VAD_PRE_ROLL_MS = 280;
 const LOCAL_VAD_MAX_SEGMENT_MS = 20_000;
-const DEMO_ORIGIN = "https://demo.shopvalidator.zhangyvjing.com";
-const DEMO_MODE = window.location.hostname === "demo.shopvalidator.zhangyvjing.com"
+const DEMO_ORIGIN = "https://demo.storevalidator.zhangyvjing.com";
+const DEMO_MODE = ["demo.shopvalidator.zhangyvjing.com", "demo.storevalidator.zhangyvjing.com"].includes(window.location.hostname)
   || new URLSearchParams(window.location.search).get("demo") === "1";
 const DEMO_TURN_MS = Math.max(40, Number(new URLSearchParams(window.location.search).get("demoSpeed")) || 4000);
 const DEMO_CHAR_MS = DEMO_TURN_MS < 100 ? 0 : 16;
