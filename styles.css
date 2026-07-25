@@ -548,6 +548,40 @@ footer > span { text-align: right; }
   footer > div { justify-content: center; }
   footer > span { text-align: center; }
 }
+
+/* ─────────────────────────────────────────────────────────────────────────
+   ShopValidator · Monochrome variant
+   This isolated worktree deliberately keeps the stable ShopValidator layout,
+   flow and information hierarchy.  Only the colour language is replaced with
+   black, white and neutral greys: no green success state, blue map panel or
+   red risk accent remains visually privileged.
+   ───────────────────────────────────────────────────────────────────────── */
+:root {
+  --ink: #111111;
+  --paper: #f4f4f1;
+  --cream: #ffffff;
+  --green: #ffffff;
+  --green-dark: #111111;
+  --blue: #eeeeee;
+  --red: #111111;
+  --amber: #353535;
+  --muted: #5f5f5c;
+  --line: rgba(17, 17, 17, .18);
+}
+
+/* Older surfaces contain literal status colours.  A final monochrome pass
+   keeps every legacy component neutral without changing markup or behaviour. */
+body { filter: grayscale(1); }
+.topbar { background: rgba(17, 17, 17, .98); }
+.brand-mark { color: #111; background: #fff; }
+.primary-button, .hero-actions .primary-button { color: #fff; background: #111; border-color: #111; }
+.primary-button:hover { color: #111; background: #fff; }
+.rank-badge, .plan-score, .location-proof, .map-summary,
+.preopen-rank-order, .preopen-rank-validate { color: #111 !important; background: #ececea !important; border-color: #111 !important; }
+.rank-badge-go, .rank-badge-test, .rank-badge-stop, .rank-badge-exit { color: #111 !important; background: #eee !important; border-color: #777 !important; }
+.map-picker-pin { color: #111; background: #fff; border-color: #111; box-shadow: 3px 3px 0 rgba(17,17,17,.32); }
+.map-picker-pin::after, .location-proof > span, .location-status.success .status-dot { background: #111; }
+.analysis-track i { background: #111; }
 @media (max-width: 580px) {
   .topbar-proof { max-width: 160px; text-align: right; }
   .hero { padding: 62px 18px 55px; }
