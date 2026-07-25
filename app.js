@@ -2904,7 +2904,7 @@ function renderPublicSharedCase(item) {
     ${lbPlansMarkup(item.plans)}
     ${lbRejectedMarkup(item.rejectedReasons)}
     <div class="result-actions public-case-actions">
-      <a class="secondary-button" href="/ranking/">查看匿名案例榜</a>
+      <a class="secondary-button" href="/ranking">查看匿名案例榜</a>
       <a class="primary-button" href="/">判断自己的店</a>
     </div>`;
 }
@@ -2920,7 +2920,7 @@ async function loadPublicSharedCase(publicId) {
     const result = $("result");
     result.hidden = false;
     result.classList.add("public-case-result");
-    result.innerHTML = `<div class="public-case-missing"><span class="section-kicker">匿名案例不可用</span><h2>这张判断票已失效，或已被下架。</h2><p>${escapeHtml(error.message || "请回到案例榜查看仍公开的记录。")}</p><div class="result-actions"><a class="primary-button" href="/ranking/">返回匿名案例榜</a></div></div>`;
+    result.innerHTML = `<div class="public-case-missing"><span class="section-kicker">匿名案例不可用</span><h2>这张判断票已失效，或已被下架。</h2><p>${escapeHtml(error.message || "请回到案例榜查看仍公开的记录。")}</p><div class="result-actions"><a class="primary-button" href="/ranking">返回匿名案例榜</a></div></div>`;
   }
 }
 

@@ -27,8 +27,8 @@ export default {
     // static SPA, but these are real, canonical resources rather than hash
     // fragments that disappear when somebody opens a copied link elsewhere.
     if (request.method === "GET" || request.method === "HEAD") {
-      if (url.pathname === "/ranking" || url.pathname === "/ranking.html") {
-        return Response.redirect(new URL("/ranking/", url).toString(), 308);
+      if (url.pathname === "/ranking.html" || url.pathname === "/ranking/") {
+        return Response.redirect(new URL("/ranking", url).toString(), 308);
       }
       if (url.pathname === "/demo") {
         return Response.redirect(new URL("/demo/", url).toString(), 308);
@@ -37,7 +37,7 @@ export default {
       if (share) {
         return Response.redirect(new URL(`/case/${share[1]}/`, url).toString(), 308);
       }
-      if (url.pathname === "/ranking/") {
+      if (url.pathname === "/ranking") {
         const rankingUrl = new URL("/ranking.html", url);
         return env.ASSETS.fetch(new Request(rankingUrl.toString(), request));
       }

@@ -11,10 +11,9 @@ custom_domain = true
 directory = "./dist"
 binding = "ASSETS"
 not_found_handling = "single-page-application"
-# Static Assets normally canonicalise `/ranking/` back to `/ranking` before
-# the presentation Worker sees it.  Route the public ranking through the
-# Worker first so the documented trailing-slash URL stays shareable too.
-run_worker_first = ["/api/*", "/ranking", "/ranking/"]
+# The public ranking has a stable resource path at `/ranking`; the Worker
+# serves its underlying static file without exposing `.html` in shared links.
+run_worker_first = ["/api/*", "/ranking", "/ranking/", "/ranking.html"]
 
 [vars]
 BACKEND_ORIGIN = "https://shopvalidator.zhangyvjing.com"

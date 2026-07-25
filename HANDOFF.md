@@ -4,7 +4,7 @@
 仓库：`Vist233/ShopValidator`  
 生产：<https://shopvalidator.zhangyvjing.com>  
 演示：<https://demo.shopvalidator.zhangyvjing.com>  
-案例榜：<https://shopvalidator.zhangyvjing.com/ranking/>
+案例榜：<https://shopvalidator.zhangyvjing.com/ranking>
 
 ## 当前状态
 
@@ -141,7 +141,7 @@ flowchart TD
 
 ### 可分享公开路径与打印票
 
-- 规范 URL 是 `/ranking/`、`/demo/` 与 `/case/:publicId/`；无尾斜杠的旧链接由展示 Worker 用 308 跳转到规范地址，`/ranking.html` 也保留跳转兼容。
+- 规范 URL 是 `/ranking`、`/demo/` 与 `/case/:publicId/`；`/ranking.html` 与 `/ranking/` 都会跳转到 `/ranking`，避免静态托管层的尾斜杠循环。
 - 结果达到匿名公开门槛后，私有结果页会出现「打印 / 分享判断票」。票上二维码与文字链接都只指向 `/case/:publicId/`。
 - 分享页只读取 `public_cases.snapshot_json` 的脱敏快照。它不会读取或显示源案卷、地址、身份、录音、原始转写、完整账目、案卷令牌或管理令牌。
 - 二维码由浏览器加载公开 URL 的 SVG 编码图；二维码加载慢时，票面上的可点击文字 URL 仍可直接打开同一记录。
