@@ -8,21 +8,40 @@
 
 ## 当前状态
 
-Cloudflare Worker 名称为 `yongge`，技术栈为 Worker + Static Assets + D1 + Queue + Durable Object。`main` 最新提交：`cf64ae0`（已推送 `origin/main`）。已部署版本 `457d4e61-3f49-4e2d-8a6d-c9449ea95780`，主站与演示站均 200，生产 `app.js` 已确认含本轮全部代码。
+Cloudflare Worker 名称为 `yongge`，技术栈为 Worker + Static Assets + D1 + Queue + Durable Object。`main` 最新提交：`20ed41c`（已推送 `origin/main`）。已部署版本 `9e4c574f-8f48-41ae-b5f4-d6cf7087cd80`，主站与演示站均正常。
 
-本轮以三个原子提交完成、一次部署上线：
+在既有问诊/分析链路之上，最近三轮新增了「preopen 地图直出选址报告」能力（细节见下文专节）：
 
-| 包 | 提交 | 内容 |
+| 轮 | 提交 | 内容 |
 |---|---|---|
-| 1 语音 UX | `a6613c6` | 问诊提交后左上角固定显示「正在整理你的回答」（单行、无副标题）；新增 `stopVoiceIo()` 在手动确认/上一题/重开时立即切断 ASR 请求、麦克风送流、TTS 播放与 TTS 请求；迟到的 ASR/TTS 结果按 `turnId` 与 `submitInFlight` 守卫丢弃，不再写入界面；本地降级保留 0.8 秒防闪屏 |
-| 2 重复出题修复 | `7265e55` | 服务端根因修复：提交后统一用「已合并事实 + 已记轮次」的最新状态重算下一题，抽取模型超时/报错的兜底路径不再回吐刚答过的问题；客户端收到 409 版本冲突时直接采用服务器返回的最新问题；新增模型故障不再重复出题的回归测试 |
-| 3 真实阶段进度 | `cf64ae0` | 服务端新增 `createRunProgressSink`，按 phase 变化节流、串行落库，轮询方不再只看到 `queued`；前端删除 900ms 定时表演，改为 `ANALYSIS_PHASES` 映射 + 已审候选比例驱动，`setAnalysisProgress` 单调不回退；新增阶段落库回归测试 |
+| 地图选址报告 | `ff47482`…`d9d32cd` | preopen 阶段跳过语音问诊，确认位置后一次同步 LLM 直出「能不能开」报告；「我不知道」→ 推荐 3 个品类（A>B>C），指定品类 → 可行性判断；新增 `test_site_report.mjs` 并纳入 `deploy.sh` 门禁；服务端 LLM 与 22 秒超时竞速兜底，客户端该请求 40 秒超时 |
+| demo 入口与阶段默认值 | `2077ba2`、`902151d` | 首页 hero 移除运城小碗菜 demo 链接；demo 入口只在判店表单最后一行、且仅「已经营业 / 有利润想增长」显示（`#panelDemoLink`）；preopen 默认「我不知道」+ 默认地址，切到后两个阶段清空默认并隐藏「我不知道」chip |
+| 报告卡片与落库 | `45e8838`、`6af4d54`、`20ed41c` | 卡片正文改为「该品类为什么适合这里」（`plan.mechanism`，每卡不同），验证动作单列「怎么验证」；site-map 报告与所选品类/位置持久化到 D1（报告存为 completed `analysis_run`，`GET /api/cases/:id/runs/:runId` 可取回）；同案卷版本复用 run id，重复生成原地更新，不再触发唯一约束 500 |
 
-关键验证：回答“最近一个月营业额十万元”会在生产案卷写入 `monthlyRevenue=100000`，下一题稳定推进为 `variableCostRate`，不重复第一题；6 项固定 + 3 项自适应按策略顺序推进、零重复。
+关键验证（既有链路未动）：回答“最近一个月营业额十万元”会在生产案卷写入 `monthlyRevenue=100000`，下一题稳定推进为 `variableCostRate`，不重复第一题；6 项固定 + 3 项自适应按策略顺序推进、零重复。
+
+## 选址报告（preopen 地图直出模式）
+
+「准备开店 / 接店」不再进入语音问诊：确认位置后 CTA 为「下一步：生成选址报告」，前端 `startSiteReport()` 以 `mode: "site-map"` 调 `POST /api/cases/:id/analyze`，服务端 `runSiteReport()` 同步直出（响应 `status:"complete"` + `runId` + `result`）。
+
+- 品类「我不知道」→ `reportType=recommend`：按客群与竞争排序推荐 3 个品类（推荐A>B>C）；指定品类 → `reportType=feasibility`：判断能不能开，给 2-3 条现场核对与低成本验证步骤。所有输出强制「需现场验证」。
+- 服务端 LLM 调用与 22 秒超时竞速，失败/超时回落确定性地理报告（规则：竞品≤8 且有客群 → GO；竞品≥20 或无客群 → STOP；其余 TEST）。客户端该请求超时 40 秒。
+- 结果页复用既有结构，按 `reportMode:"site-map"` 分流：结论映射「值得开 / 先小成本验证 / 不建议开」；指标卡来自 `siteMetrics`（800米同类竞品 + 环境信号）。
+- 卡片契约：标题 = 品类（`plan.title`），正文 = 该品类为什么适合这里（`plan.mechanism`，每卡必须非空且互不相同），验证动作单独标注「怎么验证」；不得把通用验证话术放在品类标题下的正文位。
+- 落库：报告生成后把所选品类写入 `record.category` 与 `record.facts.category`，完整报告存为 completed `analysis_run` 并回填 `latestRunId`，`GET /api/cases/:id/runs/:runId` 可直接取回。同一案卷版本复用既有 run id 原地更新（`analysis_runs` 有 `(case_id, case_version)` 唯一约束）。
+- site 案卷暂不参与匿名榜：`publishCase` 依赖 `result.top3` 与核验方案，site 结果是 `topPlans`，发布会 422，前端静默忽略（与既往行为一致）。
+
+### 阶段默认值与 demo 入口
+
+`applyStageContext(stage)`（由 `chooseStage` 调用）统一处理：
+
+- preopen：品类默认「我不知道」（chip 可见），地址预填默认（杭州余杭礼贤路湖畔科创中心）。
+- 已经营业 / 有利润想增长：清掉「我不知道」默认与默认地址（并经 `clearConfirmedLocation()` 重置已确认位置），chip 隐藏，必须填真实品类与地址；CTA 恢复「开始问诊并持续录音」，走原语音问诊。
+- 运城小碗菜 demo 链接已从首页 hero 移除，只在判店表单最后一行（`#panelDemoLink`）且仅上述两个阶段显示。
 
 ## 核心规则：6–12 问
 
-地址、阶段、品类在问诊前确认，不计入问题数。
+地址、阶段、品类在问诊前确认，不计入问题数。注意：「准备开店」现已走地图直出选址报告、不再进入问诊，下表 preopen 行仅保留在 `interview-policy.js` 中备用。
 
 | 阶段 | 固定六项 |
 |---|---|
@@ -142,11 +161,13 @@ cd output/adventurex-restaurant-decision
 - `test_dashscope_tts_client.mjs`
 - `test_stepfun_client.mjs`
 - `test_agent_orchestrator.js`
-- `test_worker.mjs`（含本轮新增：模型故障不重复出题回归、阶段落库回归）
-- 全部 14 个 `node --check` 与 9 个 node 测试文件通过；`./deploy.sh` 一次部署成功。
+- `test_worker.mjs`（含：模型故障不重复出题回归、阶段落库回归）
+- `test_site_report.mjs`（地图选址报告：recommend/feasibility 分流、GO/TEST/STOP 判定规则、推荐卡理由非空且互不相同；已纳入 `deploy.sh` 门禁）
+- 全部 `node --check` 与 node 测试文件通过；`./deploy.sh` 一次部署成功。
 - 生产 `GET /api/leaderboard` 返回 `{"cases":[]}`（空榜正常）
 - 生产文字问诊：数字入档、问诊进度为 `1 / 6 / 12`、问题不重复。
 - 浏览器实测（生产）：提交后 250ms 左上角为「正在整理你的回答」；Q1 月营收 → Q2 变动成本率 → Q3 固定成本 → Q4 可用现金 → Q5 债务，策略顺序、零重复。
+- 选址报告线上 curl 实测：建案卷 → 存位置 → `mode:"site-map"` 分析返回 `status:complete` + `runId`，三张推荐卡标题与理由一一对应；同案卷重复生成不再 500；`GET /api/cases/:id/runs/:runId` 取回完整报告（`status=completed`）。
 - 演示站回归：完整流程通过，分段时间线 16→42→66→88→96 单调、约 7.2 秒出结果，结果页正常渲染，无 console 报错。
 
 ## 已知遗留（非本轮范围）
@@ -160,13 +181,17 @@ cd output/adventurex-restaurant-decision
 3. 增加普通用户的榜单结果回填表单；后端 API 已就绪，前端尚未提供此表单。
 4. 当前 Worker 目标数为 2、并发为 1；若要严格“主方案核验通过后才生成备选”，继续重构 `agent-orchestrator.js` 的生成时序。
 5. 增加 Playwright 视觉回归基线。
-6. 审视 `analysis_runs`、审计表和公开案例的长期保留/级联清理策略。
+6. 审视 `analysis_runs`、审计表和公开案例的长期保留/级联清理策略（site-map 案卷现在也会写入 `analysis_runs`，需一并纳入）。
+7. 如需让选址报告参与匿名榜或支持「选定某个推荐方向」回写 `selectedPlanId`，需让 `publishCase` / `startPlan` 兼容 site 结果的 `topPlans` 结构。
 
 ## 常见排障
 
 - `/api/leaderboard` 404：通常是静态文件上传成功但 Worker 未切换；重新 `wrangler deploy --config wrangler.toml`，再 curl 验证。
 - 页面显示数字但结果未采纳：检查 `/turns` 响应的 `extractedFacts`。应含当前字段、归一化数值、周期与状态；检查 `deterministicAnswerFact()` 与 `canonicalInterviewFacts()`。
-- 问题重复：本轮已在服务端根因修复——提交后统一用最新状态重算下一题；若再现，检查 `worker.mjs` 提交后是否调用 `working.currentQuestion = nextQuestion(working)`，以及前端是否重用 `turnId`。
+- 问题重复：已在服务端根因修复——提交后统一用最新状态重算下一题；若再现，检查 `worker.mjs` 提交后是否调用 `working.currentQuestion = nextQuestion(working)`，以及前端是否重用 `turnId`。
 - 进度条卡在 `queued` 或来回跳：检查 `createRunProgressSink` 是否在两处 `onProgress`（`runAnalysis` 与 `processAnalysisQueueMessage`）都接入；前端应只走 `renderRunProgress`，不得再有定时 setInterval 表演。
-- 无法公开：检查丰富度≥70、分析 `completed`、且有通过核验的方案；三项均为故意门槛。
+- 选址报告报 `signal is aborted without reason`：客户端 40 秒超时先于服务端返回触发；确认服务端 22 秒 LLM 竞速兜底仍在（`runSiteReport` 内 `Promise.race`）。
+- 选址报告 `UNIQUE constraint failed: analysis_runs.case_id, analysis_runs.case_version`：说明 site-map 分支没有复用既有 run id；检查 `startAnalysis` 中 `findRunForCaseVersion` 的复用逻辑。
+- 推荐卡三张正文一样/与标题无关：正文必须渲染 `plan.mechanism`（why），不是 `plan.action`；`test_site_report.mjs` 有对应断言。
+- 无法公开：检查丰富度≥70、分析 `completed`、且有通过核验的方案；三项均为故意门槛。site-map 案卷发布 422 属预期。
 - 编辑本目录文件报 save failed：iCloud 同步竞态导致，工具偶报失败/陈旧读取；务必用 Read 或 `git diff` 复核实际落盘状态，不要盲目重试。
