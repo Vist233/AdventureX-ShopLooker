@@ -1111,7 +1111,7 @@ function askQuestion(question, index = null) {
   $("currentQuestion").dataset.factKind = question.kind || "text";
   $("currentQuestion").dataset.factLabel = question.label || FACT_LABELS[question.id] || "事实";
   const current = Math.max(1, state.interview.questionIndex + 1);
-  $("questionProgress").textContent = `第 ${current} / 12`;
+  $("questionProgress").textContent = `${current}/12`;
   setInterviewBusy(false);
   void speakQuestion(question.text, question.audioUrl);
 }
