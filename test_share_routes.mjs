@@ -27,4 +27,9 @@ assert.equal(new URL(noSlashCase.headers.get("Location")).pathname, "/case/publi
 const canonicalCase = await fetchPath("/case/public_case_123/");
 assert.equal(await canonicalCase.text(), "asset:/case/public_case_123/");
 
-console.log("share routes: canonical slash redirects and public case fallback passed");
+const index = await (await import("node:fs/promises")).readFile(new URL("./index.html", import.meta.url), "utf8");
+for (const rootAsset of ["/styles.css", "/fact-store.js", "/decision-engine.js", "/app.js", "/loading.mp4"]) {
+  assert.ok(index.includes(rootAsset), `nested public routes must load ${rootAsset} from the site root`);
+}
+
+console.log("share routes: canonical slash redirects, root assets, and public case fallback passed");

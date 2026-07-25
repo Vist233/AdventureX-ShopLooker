@@ -3179,7 +3179,7 @@ if (PUBLIC_CASE_MODE) {
   applyDefaultJudgeSetup();
 }
 
-fetch("data/corpus_analysis.json")
+fetch("/data/corpus_analysis.json")
   .then((response) => response.ok ? response.json() : Promise.reject())
   .then((data) => {
     const setStat = (id, value) => { const el = $(id); if (el) el.textContent = value; };
