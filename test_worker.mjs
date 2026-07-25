@@ -69,6 +69,9 @@ globalThis.fetch = async (input, init = {}) => {
 
   if (url.pathname.includes("/geocoder/") && url.searchParams.has("address")) {
     const address = url.searchParams.get("address");
+    if (address === "备用Key测试地址" && url.searchParams.get("key") === "test-key") {
+      return Response.json({ status: 120, message: "主密钥额度已用尽" });
+    }
     if (address === "上游失败测试地址") {
       return Response.json({ status: 120, message: "模拟上游错误" });
     }
@@ -226,6 +229,16 @@ try {
   assert.equal(addressCalls.length, 3);
   assert.equal(addressCalls.some(({ url }) => url.pathname.includes("/coord/")), false);
   assert.equal(addressCalls[0].url.searchParams.get("address"), "上海市黄浦区测试路1号");
+
+  const fallbackStart = upstreamCalls.length;
+  const fallbackResponse = await worker.fetch(
+    new Request("https://example.com/api/map/address-context?address=备用Key测试地址&category=咖啡"),
+    { ...env, TENCENT_MAP_KEY_SECONDARY: "backup-test-key" }
+  );
+  assert.equal(fallbackResponse.status, 200);
+  const fallbackCalls = upstreamCalls.slice(fallbackStart);
+  assert.equal(fallbackCalls[0].url.searchParams.get("key"), "test-key");
+  assert.equal(fallbackCalls[1].url.searchParams.get("key"), "backup-test-key");
 
   const pickedResponse = await request("/api/map/pick-context?lat=31.2304&lng=121.4737&category=咖啡");
   assert.equal(pickedResponse.status, 200);

@@ -246,8 +246,18 @@ function administrativeAreaOnly(address) {
   return /^(?:[\p{Script=Han}]{2,12}(?:省|自治区|特别行政区))?(?:[\p{Script=Han}]{2,12}市)?(?:[\p{Script=Han}]{1,12}(?:区|县|旗))?$/u.test(compact);
 }
 
+function tencentMapKeys(env) {
+  // Keep the primary key first, then retry the secondary key only when Tencent
+  // rejects or cannot serve a request.  The keys remain Worker secrets: no map
+  // request ever exposes either value to the browser.
+  return [...new Set([
+    cleanText(env?.TENCENT_MAP_KEY, 160),
+    cleanText(env?.TENCENT_MAP_KEY_SECONDARY, 160)
+  ].filter(Boolean))];
+}
+
 function configured(env) {
-  return Boolean(env?.TENCENT_MAP_KEY);
+  return tencentMapKeys(env).length > 0;
 }
 
 function mapNotConfigured() {
@@ -257,22 +267,31 @@ function mapNotConfigured() {
   }, 503);
 }
 
-async function tencentRequest(path, params, key) {
-  const url = new URL(path, "https://apis.map.qq.com");
-  Object.entries({ ...params, key }).forEach(([name, value]) => {
-    url.searchParams.set(name, String(value));
-  });
-  const response = await fetch(url, {
-    headers: {
-      "Accept": "application/json",
-      "Referer": "https://shopvalidator.zhangyvjing.com/"
-    },
-    signal: AbortSignal.timeout(7000)
-  });
-  if (!response.ok) throw new Error(`腾讯地图请求失败：${response.status}`);
-  const data = await response.json();
-  if (data.status !== 0) throw new Error(data.message || "腾讯地图返回异常");
-  return data;
+async function tencentRequest(path, params, keys) {
+  const candidates = Array.isArray(keys) ? keys : [keys];
+  let lastError = null;
+  for (const key of candidates.filter(Boolean)) {
+    try {
+      const url = new URL(path, "https://apis.map.qq.com");
+      Object.entries({ ...params, key }).forEach(([name, value]) => {
+        url.searchParams.set(name, String(value));
+      });
+      const response = await fetch(url, {
+        headers: {
+          "Accept": "application/json",
+          "Referer": "https://shopvalidator.zhangyvjing.com/"
+        },
+        signal: AbortSignal.timeout(7000)
+      });
+      if (!response.ok) throw new Error(`腾讯地图请求失败：${response.status}`);
+      const data = await response.json();
+      if (data.status !== 0) throw new Error(data.message || "腾讯地图返回异常");
+      return data;
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  throw lastError || new Error("腾讯地图密钥尚未配置");
 }
 
 // Environment signal groups scanned in site-report (rich) mode: who lives,
@@ -285,7 +304,7 @@ const ENVIRONMENT_GROUPS = [
   { key: "retail", label: "商场/超市", keyword: "商场" }
 ];
 
-async function buildContextFromGcj02(lat, lng, category, key, options = {}) {
+async function buildContextFromGcj02(lat, lng, category, keys, options = {}) {
   if (!validCoordinate(lat, lng)) throw new Error("腾讯地图坐标无效");
   const center = `${lat},${lng}`;
   const baseKeyword = category && category !== "我不知道" ? category : "餐饮";
@@ -295,7 +314,7 @@ async function buildContextFromGcj02(lat, lng, category, key, options = {}) {
       get_poi: 1,
       poi_options: "address_format=short;radius=1000;policy=1",
       output: "json"
-    }, key),
+    }, keys),
     tencentRequest("/ws/place/v1/search", {
       keyword: baseKeyword,
       boundary: `nearby(${center},800,0)`,
@@ -303,7 +322,7 @@ async function buildContextFromGcj02(lat, lng, category, key, options = {}) {
       page_index: 1,
       orderby: "_distance",
       output: "json"
-    }, key)
+    }, keys)
   ]);
 
   const reverseResult = reverse.result || {};
@@ -333,7 +352,7 @@ async function buildContextFromGcj02(lat, lng, category, key, options = {}) {
         page_index: 1,
         orderby: "_distance",
         output: "json"
-      }, key).then((res) => ({ group, res })).catch(() => ({ group, res: null }))
+      }, keys).then((res) => ({ group, res })).catch(() => ({ group, res: null }))
     ));
     environment = scans.map(({ group, res }) => {
       const places = (res?.data || []).slice(0, 10);
@@ -377,6 +396,7 @@ async function buildContextFromGcj02(lat, lng, category, key, options = {}) {
 
 export async function getMapContext(url, env) {
   if (!configured(env)) return mapNotConfigured();
+  const keys = tencentMapKeys(env);
 
   const lat = Number(url.searchParams.get("lat"));
   const lng = Number(url.searchParams.get("lng"));
@@ -392,7 +412,7 @@ export async function getMapContext(url, env) {
       locations: `${lat},${lng}`,
       type: 1,
       output: "json"
-    }, env.TENCENT_MAP_KEY);
+    }, keys);
     const mapLocation = translated.locations?.[0];
     const mapLat = Number(mapLocation?.lat);
     const mapLng = Number(mapLocation?.lng);
@@ -400,7 +420,7 @@ export async function getMapContext(url, env) {
       throw new Error("腾讯地图坐标转换失败");
     }
 
-    return json(await buildContextFromGcj02(mapLat, mapLng, category, env.TENCENT_MAP_KEY, {
+    return json(await buildContextFromGcj02(mapLat, mapLng, category, keys, {
       mode: "gps",
       rich: url.searchParams.get("rich") === "1"
     }));
@@ -414,6 +434,7 @@ export async function getMapContext(url, env) {
 
 export async function getAddressContext(url, env) {
   if (!configured(env)) return mapNotConfigured();
+  const keys = tencentMapKeys(env);
 
   const address = trimText(url.searchParams.get("address"));
   if (address.length < 3) {
@@ -431,7 +452,7 @@ export async function getAddressContext(url, env) {
     const geocoded = await tencentRequest("/ws/geocoder/v1/", {
       address,
       output: "json"
-    }, env.TENCENT_MAP_KEY);
+    }, keys);
     const location = geocoded.result?.location;
     const lat = Number(location?.lat);
     const lng = Number(location?.lng);
@@ -449,7 +470,7 @@ export async function getAddressContext(url, env) {
       }, 422);
     }
 
-    return json(await buildContextFromGcj02(lat, lng, category, env.TENCENT_MAP_KEY, {
+    return json(await buildContextFromGcj02(lat, lng, category, keys, {
       mode: "address",
       fallbackAddress: address,
       rich: url.searchParams.get("rich") === "1"
@@ -466,6 +487,7 @@ export async function getAddressContext(url, env) {
 // separate from browser GPS avoids applying the WGS84→GCJ02 conversion twice.
 export async function getPickedMapContext(url, env) {
   if (!configured(env)) return mapNotConfigured();
+  const keys = tencentMapKeys(env);
   const lat = Number(url.searchParams.get("lat"));
   const lng = Number(url.searchParams.get("lng"));
   if (!validCoordinate(lat, lng)) {
@@ -473,7 +495,7 @@ export async function getPickedMapContext(url, env) {
   }
   const category = cleanText(url.searchParams.get("category"), 24) || "餐饮";
   try {
-    return json(await buildContextFromGcj02(lat, lng, category, env.TENCENT_MAP_KEY, {
+    return json(await buildContextFromGcj02(lat, lng, category, keys, {
       mode: "map-picker",
       rich: url.searchParams.get("rich") === "1"
     }));
@@ -489,33 +511,42 @@ export async function getPickedMapContext(url, env) {
 // key stays private, while the browser can still see and click a real map.
 export async function getStaticMap(url, env) {
   if (!configured(env)) return mapNotConfigured();
+  const keys = tencentMapKeys(env);
   const lat = Number(url.searchParams.get("lat"));
   const lng = Number(url.searchParams.get("lng"));
   const zoom = Math.max(14, Math.min(18, Math.round(Number(url.searchParams.get("zoom")) || 16)));
   if (!validCoordinate(lat, lng)) {
     return json({ code: "INVALID_LOCATION", message: "地图坐标无效" }, 400);
   }
-  const target = new URL("/ws/staticmap/v2/", "https://apis.map.qq.com");
-  target.searchParams.set("center", `${lat.toFixed(6)},${lng.toFixed(6)}`);
-  target.searchParams.set("zoom", String(zoom));
-  target.searchParams.set("size", "640*360");
-  target.searchParams.set("maptype", "roadmap");
-  target.searchParams.set("key", env.TENCENT_MAP_KEY);
+  let lastError = null;
   try {
-    const response = await fetch(target, {
-      headers: { "Accept": "image/avif,image/webp,image/*,*/*;q=0.8", "Referer": "https://shopvalidator.zhangyvjing.com/" },
-      signal: AbortSignal.timeout(7000)
-    });
-    if (!response.ok) throw new Error(`腾讯静态地图请求失败：${response.status}`);
-    const type = response.headers.get("Content-Type") || "image/png";
-    if (!type.startsWith("image/")) throw new Error("腾讯静态地图返回异常");
-    return new Response(response.body, {
-      headers: {
-        "Content-Type": type,
-        "Cache-Control": "private, max-age=120",
-        "X-Content-Type-Options": "nosniff"
+    for (const key of keys) {
+      try {
+        const target = new URL("/ws/staticmap/v2/", "https://apis.map.qq.com");
+        target.searchParams.set("center", `${lat.toFixed(6)},${lng.toFixed(6)}`);
+        target.searchParams.set("zoom", String(zoom));
+        target.searchParams.set("size", "640*360");
+        target.searchParams.set("maptype", "roadmap");
+        target.searchParams.set("key", key);
+        const response = await fetch(target, {
+          headers: { "Accept": "image/avif,image/webp,image/*,*/*;q=0.8", "Referer": "https://shopvalidator.zhangyvjing.com/" },
+          signal: AbortSignal.timeout(7000)
+        });
+        if (!response.ok) throw new Error(`腾讯静态地图请求失败：${response.status}`);
+        const type = response.headers.get("Content-Type") || "image/png";
+        if (!type.startsWith("image/")) throw new Error("腾讯静态地图返回异常");
+        return new Response(response.body, {
+          headers: {
+            "Content-Type": type,
+            "Cache-Control": "private, max-age=120",
+            "X-Content-Type-Options": "nosniff"
+          }
+        });
+      } catch (error) {
+        lastError = error;
       }
-    });
+    }
+    throw lastError || new Error("腾讯地图密钥尚未配置");
   } catch (error) {
     return json({
       code: "STATIC_MAP_ERROR",
@@ -533,6 +564,7 @@ function clientIp(request) {
 
 export async function getApproximateLocation(request, env) {
   if (!configured(env)) return mapNotConfigured();
+  const keys = tencentMapKeys(env);
   const ip = clientIp(request);
   if (!ip) {
     return json({
@@ -545,7 +577,7 @@ export async function getApproximateLocation(request, env) {
     const located = await tencentRequest("/ws/location/v1/ip", {
       ip,
       output: "json"
-    }, env.TENCENT_MAP_KEY);
+    }, keys);
     const adInfo = located.result?.ad_info || {};
     const province = cleanText(adInfo.province, 20);
     const city = cleanText(adInfo.city, 20);
