@@ -24,6 +24,11 @@ def main() -> None:
 
     for filename in PUBLIC_FILES:
         shutil.copy2(ROOT / filename, DIST / filename)
+    # A physical directory index keeps `/ranking/` as a stable public
+    # resource. Without it, Static Assets canonicalises the slash away before
+    # the presentation Worker can serve the ranking page.
+    (DIST / "ranking").mkdir(parents=True)
+    shutil.copy2(ROOT / "ranking.html", DIST / "ranking" / "index.html")
     for filename in PUBLIC_DATA:
         shutil.copy2(ROOT / "data" / filename, DIST / "data" / filename)
 

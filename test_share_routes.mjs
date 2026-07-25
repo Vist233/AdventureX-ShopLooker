@@ -32,4 +32,7 @@ for (const rootAsset of ["/styles.css", "/fact-store.js", "/decision-engine.js",
   assert.ok(index.includes(rootAsset), `nested public routes must load ${rootAsset} from the site root`);
 }
 
+const buildScript = await (await import("node:fs/promises")).readFile(new URL("./build_site.py", import.meta.url), "utf8");
+assert.ok(buildScript.includes('DIST / "ranking"'), "the build must emit a physical directory for the slash ranking route");
+
 console.log("share routes: canonical slash redirects, root assets, and public case fallback passed");
