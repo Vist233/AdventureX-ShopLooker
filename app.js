@@ -143,8 +143,6 @@ const DEMO_CASE = {
   turns: [
     ["goal", "我想看看座位要不要再规划一下，外卖怎么上。"],
     ["monthlyRevenue", "一天大约四千，按一个月三十天大约十二万。"],
-    ["ordersDaily", "这个没有专门算过。"],
-    ["avgTicket", "这个没有专门算过。"],
     ["variableCostRate", "毛利大约百分之四十五，所以变动成本大约百分之五十五。"],
     ["rent", "房租一年两万七，不是一个月。"],
     ["labor", "人工一个月一万九。"],
@@ -1453,7 +1451,11 @@ async function startDemoInterview() {
     if (index >= VISIBLE_TURNS) {
       // Only the first few turns are played back visually; the rest are filled
       // in silently so the review list stays complete without a long wait.
-      const fact = upsertFact(extractLocalFact(answer));
+      const fact = upsertFact(extractLocalFact(answer, {
+        id: question[0],
+        kind: question[2],
+        label: question[3]
+      }));
       state.transcripts.push({ turnId: `demo-turn-${index + 1}`, question: question[1], text: answer, factId: fact.id, source: "demo-subtitle" });
       continue;
     }
@@ -1468,7 +1470,7 @@ async function startDemoInterview() {
     setListening("live", "正在展示案例回答");
     const answerComplete = await typeDemoText($("fallbackAnswer"), answer, token, DEMO_CHAR_MS);
     if (!answerComplete) return;
-    const fact = upsertFact(extractLocalFact(answer));
+    const fact = upsertFact(extractLocalFact(answer, prepared));
     state.transcripts.push({ turnId: state.interview.turnId, question: prepared.text, text: answer, factId: fact.id, source: "demo-subtitle" });
     const remaining = DEMO_TURN_MS - (Date.now() - startedAt);
     if (remaining > 0) await wait(remaining);
@@ -1557,10 +1559,13 @@ function parseNumericAnswer(text, kind) {
   return { value, range: null };
 }
 
-function extractLocalFact(text) {
-  const id = $("currentQuestion").dataset.factId;
-  const kind = $("currentQuestion").dataset.factKind || "text";
-  const label = $("currentQuestion").dataset.factLabel || FACT_LABELS[id] || "事实";
+function extractLocalFact(text, question = null) {
+  // Normal manual answers use the live DOM question. Demo playback also fills
+  // silent turns, so it must pass its own immutable question instead of
+  // accidentally assigning every later answer to the last visible field.
+  const id = question?.id || $("currentQuestion").dataset.factId;
+  const kind = question?.kind || $("currentQuestion").dataset.factKind || "text";
+  const label = question?.label || $("currentQuestion").dataset.factLabel || FACT_LABELS[id] || "事实";
   const unknown = /(不知道|不清楚|没算过|说不准|不确定)/.test(text);
   if (unknown) {
     return { id, label, kind, value: null, range: null, status: "unknown", source: "voice", evidence: "U", raw: text };
