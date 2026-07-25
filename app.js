@@ -2985,7 +2985,7 @@ document.querySelector("[data-testid=hero-start]").addEventListener("click", (ev
     enterWorkspace();
     return;
   }
-  $("judge").scrollIntoView({ behavior: "smooth", block: "start" });
+  setProductView("workspace", { scroll: true });
 });
 document.querySelector(".brand").addEventListener("click", (event) => {
   if (DEMO_MODE) return;
