@@ -422,7 +422,7 @@ def test_site_report_failure_is_not_rendered_as_complete(browser, base_url: str)
 
 
 def test_site_report_renders_ranked_direction_titles(browser, base_url: str) -> None:
-    """Pre-open results must show the three category titles, not generic map prose."""
+    """Pre-open recommendations use their own ranked category report, not diagnosis cards."""
     context = browser.new_context(base_url=base_url, locale="zh-CN")
     page = context.new_page()
     errors = attach_error_collection(page)
@@ -437,20 +437,27 @@ def test_site_report_renders_ranked_direction_titles(browser, base_url: str) -> 
             { label: '住宅小区', value: '6 处', hint: '师范大学博文苑' }
           ],
           topPlans: [
-            { id: 'site-1', bottleneck: '推荐A', title: '现制茶饮 / 咖啡', mechanism: '写字楼客群高频复购', action: '午高峰蹲点', budgetCap: 500, durationDays: 3, metric: '有效订单', successLine: '达标', stopLine: '不达标' },
-            { id: 'site-2', bottleneck: '推荐B', title: '快餐 / 简餐', mechanism: '午晚刚需', action: '晚高峰蹲点', budgetCap: 500, durationDays: 3, metric: '有效订单', successLine: '达标', stopLine: '不达标' },
-            { id: 'site-3', bottleneck: '推荐C', title: '小吃 / 夜宵', mechanism: '夜间需求', action: '夜间蹲点', budgetCap: 500, durationDays: 3, metric: '有效订单', successLine: '达标', stopLine: '不达标' }
-          ]
+            { id: 'site-1', bottleneck: '推荐A', title: '现制茶饮 / 咖啡', mechanism: '写字楼客群高频复购', rankReason: '工作日高频客群最匹配，因此排第一。', competitionReason: '先比较现制饮品价格带。', operatingRequirement: '出杯与价格要清楚。', risk: '晚间客群不足。', action: '午高峰蹲点', budgetCap: 500, durationDays: 3, metric: '有效订单', successLine: '达标', stopLine: '不达标' },
+            { id: 'site-2', bottleneck: '推荐B', title: '快餐 / 简餐', mechanism: '午晚刚需', rankReason: '也匹配午晚需求，但更依赖高峰出餐。', competitionReason: '查看同价位简餐。', operatingRequirement: '出餐稳定。', risk: '午高峰被成熟竞品占满。', action: '晚高峰蹲点', budgetCap: 600, durationDays: 3, metric: '有效订单', successLine: '达标', stopLine: '不达标' },
+            { id: 'site-3', bottleneck: '推荐C', title: '小吃 / 夜宵', mechanism: '夜间需求', rankReason: '只有夜间停留成立，因此排第三。', competitionReason: '查看夜间同类。', operatingRequirement: '单品足够清楚。', risk: '只有路过，没有停留。', action: '夜间蹲点', budgetCap: 400, durationDays: 3, metric: '有效订单', successLine: '达标', stopLine: '不达标' }
+          ],
+          geo: { address: '测试地址', city: '杭州市', district: '余杭区' },
+          rankingNarrative: 'A 最能承接工作日高频客群；B 需要更强的出餐缺口；C 只在夜间停留成立。'
         })"""
     )
-    expect(page.locator("#decisionTitle")).to_have_text("优先验证这 3 个方向")
-    expect(page.locator("#decisionReason")).to_contain_text("现制茶饮 / 咖啡")
-    expect(page.locator("#decisionReason")).to_contain_text("快餐 / 简餐")
-    expect(page.locator("#decisionReason")).to_contain_text("小吃 / 夜宵")
-    expect(page.locator("#narrative")).to_contain_text("A · 现制茶饮 / 咖啡")
-    expect(page.locator("#resultMetrics")).not_to_contain_text("地图口径，不代表真实客流")
-    expect(page.locator("#resultMetrics")).not_to_contain_text("未来科技城学术交流中心综合楼")
-    expect(page.locator("#resultMetrics")).not_to_contain_text("师范大学博文苑")
+    recommendation = page.locator('[data-testid="preopen-recommendation"]')
+    expect(recommendation).to_be_visible()
+    expect(recommendation).to_contain_text("如果继续考察")
+    expect(recommendation).to_contain_text("为什么 A 在 B 前")
+    expect(recommendation).to_contain_text("现制茶饮 / 咖啡")
+    expect(recommendation).to_contain_text("快餐 / 简餐")
+    expect(recommendation).to_contain_text("小吃 / 夜宵")
+    expect(recommendation).to_contain_text("为什么排在这里")
+    expect(recommendation).to_contain_text("竞争怎么判断")
+    expect(recommendation).to_contain_text("最大风险")
+    expect(recommendation.locator('[data-testid^="preopen-rank-"]')).to_have_count(3)
+    expect(page.locator("#resultMetrics")).to_be_hidden()
+    expect(page.locator("#planList")).to_be_hidden()
     if errors:
         raise AssertionError("选址结果渲染产生错误：" + " | ".join(errors))
     context.close()

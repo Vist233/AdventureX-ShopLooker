@@ -438,6 +438,65 @@ body.demo-mode .fact-review-row.demo-tapped { animation: demoTap .28s ease-out; 
 .site-direction-list p { display: grid; grid-template-columns: minmax(138px, 26%) 1fr; gap: 12px; align-items: start; padding: 12px 14px; background: rgba(255,255,255,.58); border-left: 3px solid var(--green-dark); }
 .site-direction-list b { color: var(--ink); }
 .site-direction-list span { color: var(--muted); }
+
+/* “准备开店 / 我不知道卖什么” is not a diagnosis result. It is a ranked
+   category decision, so it deliberately uses its own report layout instead of
+   reusing the operating-store plan cards. */
+.preopen-recommendation-mode > .result-main,
+.preopen-recommendation-mode > .result-metrics,
+.preopen-recommendation-mode > .narrative,
+.preopen-recommendation-mode > .result-fact-evidence,
+.preopen-recommendation-mode > .plans-heading,
+.preopen-recommendation-mode > .plan-list,
+.preopen-recommendation-mode > .rejected { display: none; }
+.preopen-recommendation { overflow: hidden; background: white; border: 1px solid var(--line); border-radius: 10px; }
+.preopen-ranking-hero { padding: clamp(25px, 4vw, 48px); color: white; background: var(--ink); }
+.preopen-kicker { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.preopen-kicker > span { color: var(--green); font: 850 11px ui-monospace, monospace; letter-spacing: .08em; }
+.preopen-kicker small { color: rgba(255,255,255,.48); text-align: right; }
+.preopen-decision { display: inline-block; margin: 25px 0 0; padding: 6px 9px; color: var(--ink); background: var(--green); border-radius: 99px; font-size: 11px; font-weight: 900; }
+.preopen-ranking-hero h2 { max-width: 800px; margin: 17px 0 11px; font-size: clamp(34px, 5.7vw, 62px); line-height: 1.08; letter-spacing: -.055em; }
+.preopen-ranking-hero h2 em { color: var(--green); font-style: normal; }
+.preopen-ranking-hero > p:last-of-type { max-width: 760px; margin: 0; color: rgba(255,255,255,.68); line-height: 1.75; }
+.preopen-signal-row { margin-top: 28px; display: grid; grid-template-columns: repeat(3, 1fr); border: 1px solid rgba(255,255,255,.17); border-radius: 7px; overflow: hidden; }
+.preopen-signal-row > div { min-height: 72px; padding: 13px 15px; border-right: 1px solid rgba(255,255,255,.17); }
+.preopen-signal-row > div:last-child { border-right: 0; }
+.preopen-signal-row span, .preopen-signal-row b { display: block; }
+.preopen-signal-row span { color: rgba(255,255,255,.52); font-size: 10px; }
+.preopen-signal-row b { margin-top: 6px; font-size: 20px; }
+.preopen-ranking-explanation { padding: clamp(24px, 4vw, 42px); display: grid; grid-template-columns: minmax(220px, .66fr) minmax(0, 1.34fr); column-gap: 36px; row-gap: 12px; background: #f4f3ed; border-bottom: 1px solid var(--line); }
+.preopen-ranking-explanation h3 { margin: 8px 0 0; font-size: 27px; line-height: 1.2; }
+.preopen-ranking-explanation > p { margin: 0; color: #394152; font-size: 15px; line-height: 1.85; }
+.preopen-ranking-explanation > small { grid-column: 2; color: var(--muted); font-size: 11px; line-height: 1.55; }
+.preopen-ranking-list { padding: clamp(24px, 4vw, 42px); }
+.preopen-ranking-list-heading { margin: 0 0 18px; display: flex; align-items: end; justify-content: space-between; gap: 20px; }
+.preopen-ranking-list-heading h3 { margin: 7px 0 0; font-size: 31px; }
+.preopen-ranking-list-heading p { max-width: 255px; margin: 0; color: var(--muted); font-size: 12px; line-height: 1.55; text-align: right; }
+.preopen-rank-card { margin-top: 15px; padding: clamp(19px, 3vw, 30px); background: #fff; border: 1px solid var(--line); border-radius: 9px; }
+.preopen-rank-card.is-primary { border: 2px solid var(--ink); box-shadow: 8px 8px 0 var(--green); }
+.preopen-rank-card > header { display: grid; grid-template-columns: 66px minmax(0, 1fr); gap: 18px; align-items: center; }
+.preopen-rank-number { min-height: 66px; display: grid; place-content: center; color: white; background: var(--ink); border-radius: 6px; }
+.preopen-rank-number span, .preopen-rank-number b { display: block; text-align: center; }
+.preopen-rank-number span { color: var(--green); font: 850 9px ui-monospace, monospace; letter-spacing: .08em; }
+.preopen-rank-number b { margin-top: 3px; font-size: 25px; line-height: 1; }
+.preopen-rank-card h3 { margin: 5px 0 0; font-size: clamp(25px, 3vw, 36px); letter-spacing: -.035em; }
+.preopen-rank-order { margin: 23px 0 0; padding: 14px 16px; background: #edf7ea; border-left: 4px solid var(--green-dark); }
+.preopen-rank-order b { color: var(--green-dark); font-size: 12px; }
+.preopen-rank-order p { margin: 5px 0 0; color: #324435; line-height: 1.65; }
+.preopen-rank-reasons { margin: 15px 0 0; display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.preopen-rank-reasons > div { padding: 13px; background: #f5f4ef; border-radius: 6px; }
+.preopen-rank-reasons dt { color: var(--green-dark); font-size: 11px; font-weight: 900; }
+.preopen-rank-reasons dd { margin: 7px 0 0; color: #46505c; font-size: 12px; line-height: 1.65; }
+.preopen-rank-validate { margin: 15px 0 0; padding: 16px; border: 1px solid #cbd7f3; background: var(--blue); border-radius: 7px; }
+.preopen-rank-validate > div:first-child > span { color: #45628c; font-size: 11px; font-weight: 900; }
+.preopen-rank-validate p { margin: 6px 0 0; color: #2f405b; line-height: 1.65; }
+.preopen-validate-meta { margin-top: 12px; display: flex; flex-wrap: wrap; gap: 6px; }
+.preopen-validate-meta span { padding: 5px 7px; color: #395578; background: rgba(255,255,255,.72); border-radius: 4px; font-size: 11px; }
+.preopen-rank-risk { margin-top: 13px; padding-top: 12px; border-top: 1px solid #cbd7f3; }
+.preopen-rank-risk b { color: #a54c43; font-size: 11px; }
+.preopen-rank-risk p { color: #5b4a46; }
+.preopen-rank-risk small { display: block; margin-top: 8px; color: #5f6c7d; line-height: 1.55; }
+.preopen-recommendation-mode .result-actions { margin: 18px 0 0; }
 .plans-heading { margin: 34px 0 15px; display: flex; justify-content: space-between; align-items: end; gap: 20px; }
 .plans-heading h3 { margin: 7px 0 0; font-size: 31px; }
 .plans-heading > span { color: var(--muted); font-size: 12px; }
@@ -520,4 +579,11 @@ footer > span { text-align: right; }
   .plans-heading { align-items: flex-start; flex-direction: column; }
   .plan-meta { grid-template-columns: 1fr; }
   .site-direction-list p { grid-template-columns: 1fr; gap: 5px; }
+  .preopen-kicker, .preopen-ranking-list-heading { align-items: flex-start; flex-direction: column; }
+  .preopen-kicker small, .preopen-ranking-list-heading p { text-align: left; }
+  .preopen-signal-row, .preopen-rank-reasons { grid-template-columns: 1fr; }
+  .preopen-signal-row > div { min-height: auto; border-right: 0; border-bottom: 1px solid rgba(255,255,255,.17); }
+  .preopen-signal-row > div:last-child { border-bottom: 0; }
+  .preopen-ranking-explanation { grid-template-columns: 1fr; }
+  .preopen-ranking-explanation > small { grid-column: auto; }
 }

@@ -2389,6 +2389,10 @@ function normalizePlan(plan, index) {
     stopLine: plan.stopLine || plan.stop_line || "没有改善就停止",
     score: plan.score ?? Math.max(70, 90 - index * 5),
     mechanism: plan.mechanism || "通过一项低成本、可撤回的动作验证关键经营假设。",
+    rankReason: plan.rankReason || plan.rank_reason || "按客群匹配度、竞争强度和经营前提的相对成立程度排序。",
+    competitionReason: plan.competitionReason || plan.competition_reason || "地图只能显示周边供给，必须现场核对实际价格、排队与空桌。",
+    operatingRequirement: plan.operatingRequirement || plan.operating_requirement || "先把产品、出餐和门店动线做成可被验证的最小模型。",
+    risk: plan.risk || "若现场客群或竞争与地图信号不一致，应停止追加投入。",
     hypothesis: plan.hypothesis || "该行动会改善当前首先断裂的经营环节。",
     evidenceRefs: Array.isArray(plan.evidenceRefs || plan.evidence_refs) ? (plan.evidenceRefs || plan.evidence_refs) : [],
     assumptions: Array.isArray(plan.assumptions) ? plan.assumptions : [],
@@ -2497,12 +2501,74 @@ function renderResultFactEvidence() {
   }).join("") : "<p>暂时没有可展示的事实；请先完成问诊与纠偏。</p>";
 }
 
+function renderPreopenRecommendation(data, assessment, plans) {
+  const result = $("result");
+  const view = $("preopenRecommendation");
+  const geo = data.geo || {};
+  const metrics = Array.isArray(data.siteMetrics) ? data.siteMetrics.slice(0, 3) : [];
+  const primary = plans[0];
+  const decisionLabels = { GO: "值得进一步考察", TEST: "先小成本验证", STOP: "不建议直接签约" };
+  const decision = decisionLabels[assessment.decision] || "先小成本验证";
+  const address = [geo.city, geo.district, geo.address].filter((value, index, all) => value && all.indexOf(value) === index).join(" · ") || "已确认位置";
+  const explanation = data.rankingNarrative || data.narrative?.body || assessment.reason || "地图只提供环境线索，品类排序必须由现场验证决定。";
+  const rankLabels = ["首选", "次选", "第三选择"];
+  const rankCards = plans.map((plan, index) => {
+    const rank = String(index + 1).padStart(2, "0");
+    return `<article class="preopen-rank-card ${index === 0 ? "is-primary" : ""}" data-testid="preopen-rank-${index + 1}">
+      <header>
+        <div class="preopen-rank-number"><span>${escapeHtml(rankLabels[index])}</span><b>${rank}</b></div>
+        <div><span class="section-kicker">${escapeHtml(plan.bottleneck)}</span><h3>${escapeHtml(plan.title)}</h3></div>
+      </header>
+      <div class="preopen-rank-order"><b>为什么排在这里</b><p>${escapeHtml(plan.rankReason)}</p></div>
+      <dl class="preopen-rank-reasons">
+        <div><dt>为什么适合</dt><dd>${escapeHtml(plan.mechanism)}</dd></div>
+        <div><dt>竞争怎么判断</dt><dd>${escapeHtml(plan.competitionReason)}</dd></div>
+        <div><dt>成立前提</dt><dd>${escapeHtml(plan.operatingRequirement)}</dd></div>
+      </dl>
+      <div class="preopen-rank-validate">
+        <div><span>先做什么</span><p>${escapeHtml(plan.action)}</p></div>
+        <div class="preopen-validate-meta"><span>${escapeHtml(plan.durationDays)} 天验证</span><span>预算上限 ¥${money.format(Number(plan.budgetCap) || 0)}</span><span>观察：${escapeHtml(plan.metric)}</span></div>
+        <div class="preopen-rank-risk"><b>最大风险</b><p>${escapeHtml(plan.risk)}</p><small>成功：${escapeHtml(plan.successLine)}　停止：${escapeHtml(plan.stopLine)}</small></div>
+      </div>
+    </article>`;
+  }).join("");
+  const metricHtml = metrics.map((metric) => `<div><span>${escapeHtml(metric.label)}</span><b>${escapeHtml(metric.value)}</b></div>`).join("");
+  view.innerHTML = `<header class="preopen-ranking-hero">
+    <div class="preopen-kicker"><span>选址品类排序</span><small>${escapeHtml(address)}</small></div>
+    <p class="preopen-decision">地图初判：${escapeHtml(decision)}</p>
+    <h2>如果继续考察，<em>先看 A · ${escapeHtml(primary?.title || "首选品类")}</em></h2>
+    <p>这不是直接签约建议。下面是基于当前环境线索给出的相对顺序：先做哪个，再看哪个，最后才考虑哪个。</p>
+    <div class="preopen-signal-row">${metricHtml}</div>
+  </header>
+  <section class="preopen-ranking-explanation">
+    <div><span class="section-kicker">AI 的整体解释</span><h3>为什么 A 在 B 前，B 又在 C 前</h3></div>
+    <p>${escapeHtml(explanation)}</p>
+    <small>地图 POI 只证明周边存在什么，不等于真实人流、营业额或租金。</small>
+  </section>
+  <section class="preopen-ranking-list">
+    <div class="preopen-ranking-list-heading"><div><span class="section-kicker">按优先级展开</span><h3>三个品类，三套不同的成立条件</h3></div><p>每一项都必须先被现场证伪，而不是直接投入。</p></div>
+    ${rankCards}
+  </section>`;
+  result.classList.add("preopen-recommendation-mode");
+  view.hidden = false;
+  $("resultLeaderboard").hidden = true;
+}
+
 function renderAnalysisResult(data) {
   $("analysisProgress").hidden = true;
   $("result").hidden = false;
   const assessment = data.deterministic || data.assessment || data;
   const metrics = assessment.metrics || {};
   const isSite = data.reportMode === "site-map";
+  const plans = (data.topPlans || data.top3 || data.plans || []).slice(0, isSite ? 3 : 2).map(normalizePlan);
+  const isPreopenRecommendation = isSite && data.reportType === "recommend" && plans.length > 0;
+  $("result").classList.toggle("preopen-recommendation-mode", isPreopenRecommendation);
+  $("preopenRecommendation").hidden = !isPreopenRecommendation;
+  if (isPreopenRecommendation) {
+    renderPreopenRecommendation(data, assessment, plans);
+    return;
+  }
+  $("resultLeaderboard").hidden = true;
   const decisionLabels = isSite
     ? { GO: "值得开", TEST: "先小成本验证", STOP: "不建议开", EXIT: "不建议开", EVIDENCE: "先小成本验证" }
     : { GO: "可以继续", TEST: "小步验证", STOP: "停止追加", EXIT: "准备退出", EVIDENCE: "小步验证" };
@@ -2528,7 +2594,6 @@ function renderAnalysisResult(data) {
     <article><span>${escapeHtml(label)}</span><strong>${escapeHtml(value)}</strong>${hint ? `<small>${escapeHtml(hint)}</small>` : ""}</article>
   `).join("");
 
-  const plans = (data.topPlans || data.top3 || data.plans || []).slice(0, isSite ? 3 : 2).map(normalizePlan);
   const evidenceTasks = (data.evidence_tasks || []).slice(0, 1).map(normalizePlan);
   const narrative = data.narrative || data.explanation || {};
   const siteDirections = isSite && data.reportType === "recommend"

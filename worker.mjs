@@ -1494,12 +1494,61 @@ export function fallbackSiteReport(geo, reportType, category) {
   else if (competitors >= 20 || !hasCrowd) decision = "STOP";
 
   const scored = [
-    { title: "现制茶饮 / 咖啡", why: "学校与写字楼人群高频、客单适中、复购强", weight: (env["学校/大学"] || 0) * 2 + (env["写字楼/公司"] || 0) * 2 },
-    { title: "快餐 / 简餐", why: "写字楼与住宅午晚刚需、翻台快", weight: (env["写字楼/公司"] || 0) * 2 + (env["住宅小区"] || 0) },
-    { title: "小吃 / 夜宵", why: "学校与住宅夜间人流、低门槛客单", weight: (env["学校/大学"] || 0) + (env["住宅小区"] || 0) },
-    { title: "社区生鲜 / 便利", why: "住宅密集、日常刚需、抗竞争", weight: (env["住宅小区"] || 0) * 2 },
-    { title: "正餐 / 家庭餐", why: "商场与住宅聚客、适合家庭消费", weight: (env["商场/超市"] || 0) + (env["住宅小区"] || 0) }
-  ].sort((a, b) => b.weight - a.weight);
+    {
+      title: "现制茶饮 / 咖啡", why: "学校与写字楼信号同时存在时，适合用高频、小客单和复购承接碎片时间。",
+      competitionReason: "先逐家看同类门店的价格带、排队和外卖评分；已有强连锁密集时，不应只靠装修硬碰。",
+      operatingRequirement: "需要稳定出杯、清楚的价格锚点和工作日高峰承接能力。",
+      risk: "若写字楼只在工作日短时活跃、学校并非可步行消费客群，复购假设会落空。",
+      action: "连续两个工作日记录上午、午后和傍晚的经过人数、同类门店进店与外卖取餐。",
+      budgetCap: 500, durationDays: 3, metric: "高峰进店率与同类价格带", successLine: "目标时段存在可观察的进店与复购需求，且能说清差异化", stopLine: "客群只路过不消费，或同类价格与产品完全无法区分"
+    },
+    {
+      title: "快餐 / 简餐", why: "写字楼与住宅叠加时，午晚两段刚需可能支撑更高频的用餐选择。",
+      competitionReason: "重点不是餐饮店数量，而是午高峰是否已被同价位、同速度的简餐完全占住。",
+      operatingRequirement: "需要高峰出餐稳定、菜单聚焦，并能把堂食与外卖的动线拆开。",
+      risk: "如果只有办公客群而晚间空置，或午高峰已被成熟连锁占满，翻台快并不等于能分到订单。",
+      action: "分别在工作日午高峰、晚高峰记录竞品排队、出餐速度、客单提示与空桌变化。",
+      budgetCap: 600, durationDays: 3, metric: "午晚高峰竞品承接与空桌变化", successLine: "两个高峰都存在未被满足的用餐需求，且可定义更快或更清楚的产品入口", stopLine: "需求只集中在单一时段，或现有竞品已无明显承接缺口"
+    },
+    {
+      title: "小吃 / 夜宵", why: "学校与住宅信号存在时，低门槛、可外带的小吃更可能承接晚间和非正餐时段。",
+      competitionReason: "要看夜间仍营业的同类是否已经形成聚集，以及用户是否为了一个单品专程停留。",
+      operatingRequirement: "需要明确的单品记忆点、短制作时间和对晚间时段的稳定覆盖。",
+      risk: "白天客流不能替代夜间需求；若夜间没有停留场景，低客单会放大房租和人工压力。",
+      action: "在周中与周末的晚间各蹲点一次，记录停留人群、同类成交和外带比例。",
+      budgetCap: 400, durationDays: 3, metric: "夜间停留与外带成交信号", successLine: "夜间存在连续停留与可观察的外带成交，且单品可与同类区分", stopLine: "夜间只有路过没有停留，或同类已经覆盖主要需求"
+    },
+    {
+      title: "社区生鲜 / 便利", why: "住宅密集时，补货、即时消费与日常刚需比纯餐饮更不依赖一次性目的消费。",
+      competitionReason: "先核对社区入口、现有便利店覆盖与即时零售配送半径，避免把住宅数量误当作购买缺口。",
+      operatingRequirement: "需要靠近真实出入口、稳定高周转商品和可控损耗，而不是只摆更多 SKU。",
+      risk: "若住户动线不经过门口，或周边已有成熟便利与配送覆盖，刚需不会自动转化。",
+      action: "早晚各观察一次社区出入口，记录补货型消费、现有便利店排队与配送骑手密度。",
+      budgetCap: 300, durationDays: 3, metric: "社区入口经过与补货型消费信号", successLine: "门口处于稳定出入口动线，且现有供给存在品类或时段缺口", stopLine: "住户动线绕开门口，或已有供给已覆盖主要补货需求"
+    },
+    {
+      title: "正餐 / 家庭餐", why: "商场与住宅共同聚客时，周末和晚餐可能形成家庭或多人用餐场景。",
+      competitionReason: "需要逐家比较家庭餐的等位、包间、客单与停车条件，不能只看商场和住宅的数量。",
+      operatingRequirement: "需要较强的晚餐服务、稳定后厨和足够的停留体验，启动成本通常更高。",
+      risk: "若没有周末与晚餐停留，正餐会先承担更高面积、人工和厨房投入。",
+      action: "在周末午晚餐各观察一次，记录家庭客比例、等位、空桌和停车可达性。",
+      budgetCap: 800, durationDays: 4, metric: "周末家庭客与晚餐停留", successLine: "周末和晚餐均出现稳定家庭停留，且竞品存在可解释的体验缺口", stopLine: "客流以单人快速消费为主，或正餐竞品已经高度饱和"
+    }
+  ].map((item) => ({
+    ...item,
+    weight: item.title === "现制茶饮 / 咖啡"
+      ? (env["学校/大学"] || 0) * 2 + (env["写字楼/公司"] || 0) * 2
+      : item.title === "快餐 / 简餐"
+        ? (env["写字楼/公司"] || 0) * 2 + (env["住宅小区"] || 0)
+        : item.title === "小吃 / 夜宵"
+          ? (env["学校/大学"] || 0) + (env["住宅小区"] || 0)
+          : item.title === "社区生鲜 / 便利"
+            ? (env["住宅小区"] || 0) * 2
+            : (env["商场/超市"] || 0) + (env["住宅小区"] || 0)
+  })).sort((a, b) => b.weight - a.weight);
+  const signalLabels = geo.environment.filter((group) => group.count > 0)
+    .sort((a, b) => b.count - a.count).slice(0, 3).map((group) => group.label);
+  const signalText = signalLabels.length ? signalLabels.join("、") : "有限的周边环境信号";
 
   let options;
   if (reportType === "recommend") {
@@ -1507,9 +1556,17 @@ export function fallbackSiteReport(geo, reportType, category) {
       rank: ["A", "B", "C"][index],
       title: item.title,
       why: item.why,
-      action: "先到现场蹲点核对客群与竞争，再用一次低成本试卖验证需求。",
-      budgetCap: 500, durationDays: 3, metric: "试卖期有效订单与转化",
-      successLine: "试卖达到预期订单且客群与判断一致", stopLine: "试卖无人问津或客群与判断明显不符则放弃该品类"
+      rankReason: index === 0
+        ? `${signalText}是当前最强的环境线索；在同类餐饮竞争较高时，它对这组线索的依赖最直接，因此排第一。`
+        : index === 1
+          ? `它也能承接${signalText}，但对高峰时段、出餐效率或既有竞品缺口的依赖更强，所以排在首选之后。`
+          : `它只在特定时段或特定停留场景成立；地图提供了可能性，但需要比前两项更多现场证据，所以排第三。`,
+      competitionReason: item.competitionReason,
+      operatingRequirement: item.operatingRequirement,
+      risk: item.risk,
+      action: item.action,
+      budgetCap: item.budgetCap, durationDays: item.durationDays, metric: item.metric,
+      successLine: item.successLine, stopLine: item.stopLine
     }));
   } else {
     options = [
@@ -1522,10 +1579,13 @@ export function fallbackSiteReport(geo, reportType, category) {
     ? "这个位置更适合开什么"
     : `这个位置能不能开${category || "这个品类"}`;
   const reason = reportType === "recommend"
-    ? `周边800米约${competitors}个同类，客群信号${hasCrowd ? "较清晰" : "偏弱"}；按客群与竞争排序给出更匹配的品类，需现场验证。`
+    ? `周边800米约${competitors}个同类，客群信号${hasCrowd ? "存在但仍需核实" : "偏弱"}；排序只说明相对匹配度，不等于可以直接签约。`
     : `周边800米约${competitors}个同类竞品，客群信号${hasCrowd ? "较清晰" : "偏弱"}；据此给出能否开的初判，结论需现场验证。`;
 
-  return { decision, title: headline, reason, headline, diagnosis: reason, options };
+  const diagnosis = reportType === "recommend"
+    ? `这不是“地图上看着热闹就能开”的结论。当前主要环境线索来自${signalText}，但800米内已有约${competitors}个同类。首选排在前面，是因为它更能承接现有环境线索、较少依赖与成熟餐饮正面硬碰；次选和第三选择分别需要验证高峰与时段场景。三项都必须先用现场观察和低成本试卖证伪。`
+    : reason;
+  return { decision, title: headline, reason, headline, diagnosis, rankingNarrative: diagnosis, options };
 }
 
 function normalizeSiteOptions(options, reportType) {
@@ -1539,13 +1599,17 @@ function normalizeSiteOptions(options, reportType) {
       : "落地验证",
     action: trimText(option?.action || option?.why, 400) || "先现场核对，再低成本验证。",
     mechanism: trimText(option?.why, 300) || "基于周边客群与竞争的环境证据。",
+    rankReason: trimText(option?.rankReason || option?.rank_reason, 300) || "按客群匹配度、竞争强度和经营前提的相对成立程度排序。",
+    competitionReason: trimText(option?.competitionReason || option?.competition_reason, 300) || "地图只能显示周边供给，必须现场核对实际价格、排队与空桌。",
+    operatingRequirement: trimText(option?.operatingRequirement || option?.operating_requirement, 300) || "先把产品、出餐和门店动线做成可被验证的最小模型。",
+    risk: trimText(option?.risk, 300) || "若现场客群或竞争与地图信号不一致，应停止追加投入。",
     budgetCap: Number(option?.budgetCap) || 0,
     durationDays: Number(option?.durationDays) || 3,
     metric: cleanText(option?.metric, 60) || "现场验证指标",
     successLine: trimText(option?.successLine, 200) || "达到预设验证线",
     stopLine: trimText(option?.stopLine, 200) || "未达预设线即停止",
     detail_markdown: option?.why
-      ? `**为什么是它**：${trimText(option.why, 400)}\n\n**先做什么**：${trimText(option?.action, 400) || "到现场核对客群与竞争，再低成本试卖验证。"}`
+      ? `**为什么是它**：${trimText(option.why, 400)}\n\n**为什么排在这个位置**：${trimText(option?.rankReason || option?.rank_reason, 400)}\n\n**竞争怎么判断**：${trimText(option?.competitionReason || option?.competition_reason, 400)}\n\n**先做什么**：${trimText(option?.action, 400) || "到现场核对客群与竞争，再低成本试卖验证。"}`
       : undefined
   }));
 }
@@ -1557,6 +1621,17 @@ export async function runSiteReport(record, env, body) {
   const llm = createTextLlm(env);
 
   let core = fallbackSiteReport(geo, reportType, category);
+  // The model may improve the wording, but it must never erase the concrete
+  // per-category evidence / validation differences supplied by the rule-based
+  // report.  Otherwise three different headings collapse into three copies of
+  // the same generic "go and observe" card.
+  const mergeOptionWithFallback = (fallbackOption, modelOption) => {
+    const supplied = Object.fromEntries(Object.entries(modelOption || {}).filter(([, value]) => {
+      if (typeof value === "string") return value.trim().length > 0;
+      return value !== null && value !== undefined;
+    }));
+    return { ...fallbackOption, ...supplied };
+  };
   if (llm) {
     try {
       // Keep the on-site experience snappy: if the model is slow, fall back to
@@ -1578,11 +1653,16 @@ export async function runSiteReport(record, env, body) {
               title: "一句话结论",
               reason: "为什么这样判断（基于地理客群与竞争）",
               headline: "结果页大标题",
-              diagnosis: "120-260字解读，说明客群来源、竞争密度与环境冲突，并提示需现场验证",
+              diagnosis: "120-260字总体排序解读，说明客群来源、竞争密度与环境冲突，并提示需现场验证",
+              rankingNarrative: "120-260字，直接解释A为什么排B前、B为什么排C前；不能把POI数量说成人流",
               options: [{
                 rank: "recommend用A/B/C；feasibility可省略",
                 title: "string",
-                why: "为什么（客群+竞争）",
+                why: "这个品类为什么适合（客群+消费场景）",
+                rankReason: "为什么排在这个位置，必须和其他两个比较",
+                competitionReason: "要避开或面对什么竞争，不能把POI数量当客流",
+                operatingRequirement: "这个品类成立前，门店/产品/时段必须满足什么",
+                risk: "最大反例或失败条件",
                 action: "现场核对或低成本验证动作",
                 budgetCap: "number 元",
                 durationDays: "number 天",
@@ -1595,14 +1675,16 @@ export async function runSiteReport(record, env, body) {
         }
       ], { temperature: 0.3, maxTokens: 1600 }), llmTimeout]);
       const decision = cleanText(response?.decision, 10).toUpperCase();
-      if (["GO", "TEST", "STOP"].includes(decision) && Array.isArray(response?.options) && response.options.length) {
+      const minimumOptions = reportType === "recommend" ? 3 : 1;
+      if (["GO", "TEST", "STOP"].includes(decision) && Array.isArray(response?.options) && response.options.length >= minimumOptions) {
         core = {
           decision,
           title: cleanText(response.title, 160) || core.title,
           reason: trimText(response.reason, 500) || core.reason,
           headline: cleanText(response.headline, 160) || core.headline,
           diagnosis: trimText(response.diagnosis, 600) || core.diagnosis,
-          options: response.options
+          rankingNarrative: trimText(response.rankingNarrative, 700) || trimText(response.diagnosis, 600) || core.rankingNarrative,
+          options: core.options.map((fallbackOption, index) => mergeOptionWithFallback(fallbackOption, response.options[index]))
         };
       }
     } catch (_) {
@@ -1624,8 +1706,9 @@ export async function runSiteReport(record, env, body) {
       metrics: {}
     },
     siteMetrics,
-    geo: { competitorCount: geo.competitorCount, competitorKeyword: geo.competitorKeyword, environment: geo.environment },
+    geo: { address: geo.address, city: geo.city, district: geo.district, competitorCount: geo.competitorCount, competitorKeyword: geo.competitorKeyword, environment: geo.environment },
     narrative: { title: core.headline, body: core.diagnosis },
+    rankingNarrative: core.rankingNarrative || core.diagnosis,
     explanation: {
       headline: core.headline,
       diagnosis: core.diagnosis,

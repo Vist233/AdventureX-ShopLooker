@@ -55,7 +55,8 @@ const emptyEnvironment = [
     ["推荐A", "推荐B", "推荐C"],
     "recommend options must be ranked A>B>C"
   );
-  // Reuses the standard result shape the client renderer consumes.
+  // It still uses the shared data shape, but the browser renders it in a
+  // dedicated ranked-category report rather than generic diagnosis cards.
   assert.ok(["GO", "TEST", "STOP"].includes(result.deterministic.decision));
   assert.equal(result.siteMetrics.length, 3, "always emit 3 metric cards");
   assert.equal(result.siteMetrics[0].label, "800米同类竞品");
@@ -68,6 +69,15 @@ const emptyEnvironment = [
   const reasons = result.topPlans.map((p) => p.mechanism);
   reasons.forEach((why) => assert.ok(why && why.length > 4, "each recommend card needs a why/mechanism"));
   assert.equal(new Set(reasons).size, reasons.length, "recommend reasons must be distinct per category");
+  const rankReasons = result.topPlans.map((p) => p.rankReason);
+  rankReasons.forEach((reason) => assert.ok(reason && reason.length > 12, "each recommendation needs a comparative rank reason"));
+  assert.equal(new Set(rankReasons).size, rankReasons.length, "ranking reasons must explain different positions");
+  result.topPlans.forEach((plan) => {
+    assert.ok(plan.competitionReason.length > 12, "each category needs a competition explanation");
+    assert.ok(plan.operatingRequirement.length > 12, "each category needs an operating requirement");
+    assert.ok(plan.risk.length > 12, "each category needs a falsifiable risk");
+  });
+  assert.ok(result.rankingNarrative.includes("首选") || result.rankingNarrative.includes("排序"), "recommend report needs an overall ordering explanation");
 }
 
 // 2) feasibility mode: a specific category -> validation steps, feasibility type.

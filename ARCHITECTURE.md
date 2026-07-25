@@ -83,6 +83,14 @@ IP 位置只允许预填城市，不返回店铺坐标，也不能直接解锁�
 
 Demo 不调用腾讯地图、ASR、D1 案卷或付费 Agent；没有出现在字幕中的字段保持 `unknown`。它是现场讲解路径，不是对真实门店的分析结果。
 
+### 3.5 准备开店的选址品类排序报告
+
+当用户选择“准备开店 / 接店”且品类为“我不知道”时，结果页不复用已经营业门店的经营诊断卡。它单独呈现三项按优先级排序的候选品类：首选、次选、第三选择。
+
+每个候选必须分别展示：为什么排在该位置、为什么适合、竞争怎么判断、成立前提、先做什么、验证期限/预算/指标、最大风险，以及成功线和停止线。总体解释必须说明 A 为什么在 B 前、B 为什么在 C 前；地图 POI 仅是环境线索，不能被写成人流、营业额或租金。
+
+规则引擎始终提供每个品类不同的竞争、经营与反例字段。若模型生成了更好的文字，会逐字段覆盖；若模型漏字段、只给少于三项或返回空话，规则引擎的差异化字段保留，避免三张不同标题却内容相同的卡片。
+
 ## 4. 语音、DashScope 与 StepFun
 
 ### 4.1 模型
@@ -304,7 +312,7 @@ POST   /api/tts
 |DashScope TTS 客户端|`node test_dashscope_tts_client.mjs`|指令、Serena 音色、鉴权与音频解码|
 |Agent 搜索|`node test_agent_orchestrator.js`|3 候选、每个双核验、并发不超过 3、硬上限 3|
 |Worker|`node test_worker.mjs`|地图、案卷、鉴权、单轮 WAV ASR、AgentGate|
-|浏览器 E2E|`python test_location_e2e.py`|位置、一次启动、降级、全量查证、一次提交和数字口径|
+|浏览器 E2E|`python test_location_e2e.py`|位置、一次启动、降级、全量查证、一次提交、数字口径与选址三品类排序页|
 |真实 StepFun 文本|`node test_stepfun_live.mjs`|真实 JSON 文本调用|
 |真实腾讯地图|`node test_worker_live.mjs`|真实地址与周边接口|
 |生产 ASR 冒烟|`node test_production_asr.mjs`|真实 Worker Secret、二进制 WAV 上传与 Fun-ASR-Flash 返回|
