@@ -146,6 +146,15 @@ flowchart TD
 - D1：`yongge-cases`，绑定名 `DB`
 - 已执行生产迁移：`migrations/0002_public_cases.sql`
 
+### StoreValidator 版式分支
+
+- 分支：`storevalidator-receipt-review`
+- 站点：`https://storevalidator.zhangyvjing.com`
+- 配置：`wrangler.storevalidator.toml`
+- 发布：`deploy-storevalidator.sh`
+
+这个站点只承载独立版本的静态前端（全站字体与第三步“事实核对单”的票据式布局）。它将同源 `/api/*` 请求转发到 `shopvalidator.zhangyvjing.com` 的现有决策后端，因此不会复制 D1 案卷、排行榜、队列、Durable Object 或模型密钥，也不会与正式 Worker 竞争队列消费。
+
 常规发布：
 
 ```bash

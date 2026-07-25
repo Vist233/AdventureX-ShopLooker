@@ -485,6 +485,7 @@ def test_mobile_review_layout(browser, base_url: str) -> None:
         }"""
     )
     expect(page.locator('[data-testid="fact-review-row"]')).to_have_count(19)
+    expect(page.locator(".review-receipt-meta")).to_contain_text("事实核对单")
     expect(page.locator('[data-role="edit-text"]').first).to_have_attribute(
         "placeholder", "点这里直接改"
     )
@@ -492,11 +493,15 @@ def test_mobile_review_layout(browser, base_url: str) -> None:
         """() => ({
           viewport: window.innerWidth,
           scrollWidth: document.documentElement.scrollWidth,
-          submitVisible: document.getElementById('submitReview').getBoundingClientRect().width > 0
+          submitVisible: document.getElementById('submitReview').getBoundingClientRect().width > 0,
+          receiptRadius: getComputedStyle(document.getElementById('reviewPanel')).borderRadius,
+          rowDivider: getComputedStyle(document.querySelector('.fact-review-row')).borderBottomStyle
         })"""
     )
     assert layout["scrollWidth"] <= layout["viewport"], layout
     assert layout["submitVisible"] is True
+    assert layout["receiptRadius"] == "0px", layout
+    assert layout["rowDivider"] == "dashed", layout
     if errors:
         raise AssertionError("手机查证页产生错误：" + " | ".join(errors))
     context.close()
