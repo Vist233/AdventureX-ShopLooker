@@ -59,6 +59,9 @@ def fulfill_json(route: Route, body: dict[str, Any], status: int = 200) -> None:
 
 def api_fixture(route: Route) -> None:
     path = route.request.url.split("?", 1)[0]
+    if path.endswith("/api/leaderboard"):
+        fulfill_json(route, {"cases": []})
+        return
     if path.endswith("/api/map/context") or path.endswith("/api/map/address-context"):
         fulfill_json(
             route,
@@ -195,7 +198,8 @@ def confirm_manual_location(page: Page) -> None:
 
 def enter_workspace(page: Page) -> None:
     page.locator('[data-testid="hero-start"]').click()
-    expect(page.locator("body")).to_have_attribute("data-product-view", "workspace")
+    # The redesigned landing keeps the first location step as its final
+    # scroll-snap page; the CTA scrolls there instead of switching page mode.
     expect(page.locator('[data-testid="location-step"]')).to_be_visible()
 
 
@@ -207,9 +211,9 @@ def test_landing_and_workspace_are_separate(browser, base_url: str) -> None:
     expect(page.locator(".hero")).to_contain_text("5.8 万亿元")
     expect(page.locator(".hero")).to_contain_text("339 万家")
     expect(page.locator(".hero")).to_contain_text("65.1%")
-    expect(page.locator("#judge")).to_be_hidden()
+    expect(page.locator("#judge")).to_be_visible()
     enter_workspace(page)
-    expect(page.locator(".hero")).to_be_hidden()
+    expect(page.locator("body")).to_have_attribute("data-product-view", "landing")
     context.close()
 
 
@@ -229,19 +233,19 @@ def test_location_and_text_fallback(browser, base_url: str) -> None:
     expect(page.locator('[data-panel="interview"]')).to_be_visible()
     expect(page.locator("#textFallback")).to_be_visible(timeout=8_000)
     expect(page.locator("#currentQuestion")).to_contain_text("最想解决")
-    expect(page.locator("#questionProgress")).to_contain_text("第 1 / 6-12")
+    expect(page.locator("#questionProgress")).to_contain_text("第 1 / 6 · 最多补至 12")
 
     page.locator("#fallbackAnswer").fill("最近亏损，想先止损")
     page.locator("#textFallback button[type=submit]").click()
     expect(page.locator("#currentQuestion")).to_contain_text("一个月", timeout=5_000)
-    expect(page.locator("#questionProgress")).to_contain_text("第 2 / 6-12")
+    expect(page.locator("#questionProgress")).to_contain_text("第 2 / 6 · 最多补至 12")
     page.locator("#previousQuestion").click()
     expect(page.locator("#currentQuestion")).to_contain_text("最想解决")
-    expect(page.locator("#questionProgress")).to_contain_text("第 1 / 6-12")
+    expect(page.locator("#questionProgress")).to_contain_text("第 1 / 6 · 最多补至 12")
     page.locator("#fallbackAnswer").fill("最近亏损，想先止损")
     page.locator("#textFallback button[type=submit]").click()
     expect(page.locator("#currentQuestion")).to_contain_text("一个月", timeout=5_000)
-    expect(page.locator("#questionProgress")).to_contain_text("第 2 / 6-12")
+    expect(page.locator("#questionProgress")).to_contain_text("第 2 / 6 · 最多补至 12")
     page.locator("#fallbackAnswer").fill("一个月大约十二万")
     page.locator("#textFallback button[type=submit]").click()
     page.evaluate("() => finishInterview()")
@@ -347,6 +351,51 @@ def test_gps_and_number_semantics(browser, base_url: str) -> None:
     context.close()
 
 
+def test_site_report_failure_is_not_rendered_as_complete(browser, base_url: str) -> None:
+    """Any rejected report must be actionable, never an empty 100% result page."""
+    context = browser.new_context(base_url=base_url, locale="zh-CN")
+
+    def limited_api(route: Route) -> None:
+        if route.request.url.split("?", 1)[0].endswith("/analyze"):
+            payload = route.request.post_data_json
+            assert payload == {"mode": "site-map", "category": "我不知道"}
+            fulfill_json(
+                route,
+                {
+                    "code": "UPSTREAM_UNAVAILABLE",
+                    "message": "地图服务暂时不可用，请稍后再试",
+                },
+                429,
+            )
+            return
+        api_fixture(route)
+
+    context.route("**/api/**", limited_api)
+    page = context.new_page()
+    errors = attach_error_collection(page)
+    page.goto("/", wait_until="domcontentloaded")
+    enter_workspace(page)
+    # The preopen default intentionally uses the unknown-category map report.
+    page.locator("#manualLocation").fill(ADDRESS)
+    page.locator("#useManualLocation").click()
+    expect(page.locator("#mapSummary")).to_be_visible()
+    page.locator("#confirmLocation").click()
+    page.locator("#beginInterview").click()
+
+    expect(page.locator('[data-testid="analysis-failure"]')).to_be_visible()
+    expect(page.locator("#analysisFailureTitle")).to_have_text("暂时无法生成报告")
+    expect(page.locator("#analysisFailureMessage")).to_have_text("地图服务暂时不可用，请稍后再试")
+    expect(page.locator("#analysisProgress")).to_be_hidden()
+    expect(page.locator("#result")).to_be_hidden()
+    expect(page.locator("#analysisPercent")).not_to_have_text("100%")
+    page.locator("#analysisFailureBack").click()
+    expect(page.locator('[data-panel="location"]')).to_be_visible()
+    expect(page.locator("#beginInterview")).to_be_enabled()
+    if errors:
+        raise AssertionError("选址报告失败状态产生错误：" + " | ".join(errors))
+    context.close()
+
+
 def test_mobile_review_layout(browser, base_url: str) -> None:
     context = browser.new_context(
         base_url=base_url,
@@ -420,11 +469,12 @@ def main() -> None:
             test_landing_and_workspace_are_separate(browser, site.url)
             test_location_and_text_fallback(browser, site.url)
             test_gps_and_number_semantics(browser, site.url)
+            test_site_report_failure_is_not_rendered_as_complete(browser, site.url)
             test_mobile_review_layout(browser, site.url)
             test_subtitle_case_demo(browser, site.url)
         finally:
             browser.close()
-    print("browser E2E: location, fallback, full review, mobile layout, subtitle demo, Top3 and number semantics passed")
+    print("browser E2E: location, fallback, full review, report failure recovery, mobile layout, subtitle demo, Top3 and number semantics passed")
 
 
 if __name__ == "__main__":

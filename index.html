@@ -179,7 +179,7 @@
         <section class="flow-card flow-panel interview-panel" id="interviewPanel" data-panel="interview" hidden data-testid="interview-step">
           <div class="interview-topline">
             <span class="listening-pill" id="listeningPill"><i></i><b id="listeningLabel">正在准备</b></span>
-            <span id="questionProgress" data-testid="question-progress">第 1 / 12</span>
+            <span id="questionProgress" data-testid="question-progress">第 1 / 6 · 最多补至 12</span>
           </div>
 
           <div class="question-stage" aria-live="polite">
@@ -244,6 +244,13 @@
               <li>生成已核验备选</li>
             </ol>
           </div>
+
+          <section class="analysis-failure" id="analysisFailure" hidden role="alert" aria-live="assertive" data-testid="analysis-failure">
+            <span class="section-kicker">本次未生成报告</span>
+            <h3 id="analysisFailureTitle">暂时无法生成报告</h3>
+            <p id="analysisFailureMessage">请返回检查位置或稍后再试。</p>
+            <button class="secondary-button" id="analysisFailureBack" type="button">返回修改位置</button>
+          </section>
 
           <section class="result-shell" id="result" hidden aria-live="polite" data-testid="result">
             <div class="result-main">

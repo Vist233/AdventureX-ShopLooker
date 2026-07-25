@@ -394,6 +394,9 @@ body.demo-mode .fact-review-row.demo-tapped { animation: demoTap .28s ease-out; 
 #analysisPercent { display: block; margin: 0 0 6px; font-size: clamp(30px, 5vw, 44px); font-weight: 900; letter-spacing: -.03em; font-variant-numeric: tabular-nums; }
 #analysisProgress h3 { margin: 12px 0 8px; font-size: clamp(28px, 4vw, 42px); }
 #analysisProgress > p { color: var(--muted); }
+.analysis-failure { max-width: 560px; margin: 68px auto; padding: 32px; text-align: center; border: 1px solid #d6c8bc; border-radius: 20px; background: #fffaf4; }
+.analysis-failure h3 { margin: 10px 0 8px; font-size: clamp(24px, 4vw, 34px); }
+.analysis-failure p { margin: 0 auto 22px; color: var(--muted); line-height: 1.7; }
 .analysis-track { max-width: 560px; height: 8px; margin: 25px auto; background: #deddd5; border-radius: 20px; overflow: hidden; }
 .analysis-track i { width: 8%; height: 100%; display: block; background: var(--green-dark); transition: width .35s; }
 .analysis-steps { max-width: 580px; margin: 0 auto; padding: 0; display: grid; grid-template-columns: repeat(5, 1fr); list-style: none; color: #aaa; font-size: 10px; }

@@ -10,6 +10,8 @@
 
 Cloudflare Worker 名称为 `yongge`，技术栈为 Worker + Static Assets + D1 + Queue + Durable Object。`main` 最新提交：`20ed41c`（已推送 `origin/main`）。已部署版本 `9e4c574f-8f48-41ae-b5f4-d6cf7087cd80`，主站与演示站均正常。
 
+2026-07-25 的待提交修复：完整分析已取消按日、按 IP 的次数限制；Worker 不再调用 `consumeDailyAnalysisBudget()`。选址报告任意失败都会进入可返回的失败卡，不会错误显示 100% 后留在空白结果页。已补浏览器回归覆盖此失败状态；生产临时案卷实测在旧 IP 已触及原限制的情况下仍成功完成一份报告，随后已删除测试案卷。
+
 在既有问诊/分析链路之上，最近三轮新增了「preopen 地图直出选址报告」能力（细节见下文专节）：
 
 | 轮 | 提交 | 内容 |

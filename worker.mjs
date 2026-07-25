@@ -1907,16 +1907,6 @@ async function startAnalysis(request, env, caseId, ctx) {
   // Preopen site-report mode skips the financial interview entirely and returns
   // a map-driven "can I open here" report in one synchronous LLM pass.
   if (body.mode === "site-map") {
-    const budget = await consumeDailyAnalysisBudget(request, env);
-    if (!budget.allowed) {
-      return apiJson(request, env, {
-        code: budget.reason === "global" ? "ANALYSIS_DAILY_BUDGET_EXHAUSTED" : "ANALYSIS_DAILY_IP_LIMIT",
-        message: budget.reason === "global"
-          ? "今日全站分析预算已用完，请明天再试"
-          : `每个网络地址每天最多新建${budget.ipLimit || DEFAULT_DAILY_IP_ANALYSIS_BUDGET}次完整分析`,
-        retryAfterMs: budget.retryAfterMs
-      }, 429);
-    }
     const result = await runSiteReport(record, env, body);
     // Persist the selection (confirmed location + chosen category / "我不知道")
     // and the generated report as a completed run, so this site case is saved to
@@ -2031,18 +2021,6 @@ async function startAnalysis(request, env, caseId, ctx) {
       runId: previous.id,
       status: previous.status
     }, 409);
-  }
-  const budget = await consumeDailyAnalysisBudget(request, env);
-  if (!budget.allowed) {
-    return apiJson(request, env, {
-      code: budget.reason === "global"
-        ? "ANALYSIS_DAILY_BUDGET_EXHAUSTED"
-        : "ANALYSIS_DAILY_IP_LIMIT",
-      message: budget.reason === "global"
-        ? "今日全站分析预算已用完，请明天再试"
-        : `每个网络地址每天最多新建${budget.ipLimit || DEFAULT_DAILY_IP_ANALYSIS_BUDGET}次完整分析`,
-      retryAfterMs: budget.retryAfterMs
-    }, 429);
   }
   const id = secureId("run");
   const timestamp = nowIso();

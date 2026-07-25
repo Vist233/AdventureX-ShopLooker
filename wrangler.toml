@@ -58,8 +58,6 @@ DASHSCOPE_TTS_URL = "https://dashscope.aliyuncs.com/api/v1/services/aigc/multimo
 DASHSCOPE_TTS_MODEL = "qwen3-tts-instruct-flash"
 DASHSCOPE_TTS_VOICE = "Serena"
 DASHSCOPE_TTS_INSTRUCTIONS = "温柔、自然、有专业感的年轻女声；普通话清晰；中等偏慢语速；像一位可信赖的产品助手。"
-ANALYSIS_DAILY_BUDGET = "25"
-ANALYSIS_DAILY_IP_BUDGET = "5"
 
 # Secrets are configured with:
 #   npx wrangler secret put STEPFUN_API_KEY

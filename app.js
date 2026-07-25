@@ -1111,7 +1111,11 @@ function askQuestion(question, index = null) {
   $("currentQuestion").dataset.factKind = question.kind || "text";
   $("currentQuestion").dataset.factLabel = question.label || FACT_LABELS[question.id] || "事实";
   const current = Math.max(1, state.interview.questionIndex + 1);
-  $("questionProgress").textContent = `第 ${current} / ${state.interview.progress?.maxTurns || 12}`;
+  const coreTarget = state.interview.progress?.coreTarget || 6;
+  const maxTurns = state.interview.progress?.maxTurns || 12;
+  $("questionProgress").textContent = current <= coreTarget
+    ? `第 ${current} / ${coreTarget} · 最多补至 ${maxTurns}`
+    : `补充第 ${current - coreTarget} 题 · 已答 ${current} / 最多 ${maxTurns}`;
   setInterviewBusy(false);
   void speakQuestion(question.text, question.audioUrl);
 }
@@ -1921,17 +1925,18 @@ async function startSiteReport() {
   setProductView("result");
   setPanel("result");
   $("analysisProgress").hidden = false;
+  $("analysisFailure").hidden = true;
   $("result").hidden = true;
   state.analysisFloor = 0;
   $("analysisTitle").textContent = "正在读取周边环境";
   $("analysisStatus").textContent = "在扫描竞品、客群与交通信号，按勇哥框架判断能不能开…";
   setAnalysisProgress(15);
   document.querySelectorAll("#analysisSteps li").forEach((item, index) => item.classList.toggle("active", index === 0));
-  await createCase();
-  const category = $("category").value.trim() || "我不知道";
-  setAnalysisProgress(45);
-  if (!state.localMode && state.caseId) {
-    try {
+  try {
+    await createCase();
+    const category = $("category").value.trim() || "我不知道";
+    setAnalysisProgress(45);
+    if (!state.localMode && state.caseId) {
       const data = await fetchJson(`/api/cases/${encodeURIComponent(state.caseId)}/analyze`, {
         method: "POST",
         headers: caseHeaders({ "Content-Type": "application/json" }),
@@ -1946,16 +1951,11 @@ async function startSiteReport() {
         watchAnalysisRun(data.runId);
         return;
       }
-    } catch (error) {
-      stopProgressAnimation();
-      setAnalysisProgress(100);
-      $("analysisStatus").textContent = error.message || "地图报告生成失败，请稍后重试。";
-      return;
     }
+    throw new Error("云端未连接，无法生成地图报告，请检查网络后重试。");
+  } catch (error) {
+    showAnalysisFailure(error);
   }
-  stopProgressAnimation();
-  setAnalysisProgress(100);
-  $("analysisStatus").textContent = "云端未连接，无法生成地图报告，请检查网络后重试。";
 }
 
 async function startAnalysis() {
@@ -2130,6 +2130,25 @@ function stopProgressAnimation() {
   clearInterval(state.analysisTimer);
   state.analysisTimer = null;
   setAnalysisProgress(100);
+}
+
+// A rejected request is not a completed report.  Keep failure and completion
+// as separate UI states: never paint 100% while leaving the result empty.
+function showAnalysisFailure(error) {
+  clearInterval(state.analysisTimer);
+  state.analysisTimer = null;
+  $("analysisProgress").hidden = true;
+  $("result").hidden = true;
+  $("analysisFailure").hidden = false;
+  $("analysisFailureTitle").textContent = "暂时无法生成报告";
+  $("analysisFailureMessage").textContent = error?.message || "请检查网络后返回重新提交。";
+}
+
+function returnToLocationFromFailure() {
+  $("analysisFailure").hidden = true;
+  state.analysisFloor = 0;
+  setProductView("workspace");
+  setPanel("location");
 }
 
 async function watchAnalysisRun(runId) {
@@ -2707,6 +2726,7 @@ function resetFlow() {
   $("beginInterview").disabled = true;
   $("result").hidden = true;
   $("analysisProgress").hidden = false;
+  $("analysisFailure").hidden = true;
   $("previousQuestion").hidden = false;
   $("previousQuestion").disabled = true;
   $("confirmAnswer").disabled = false;
@@ -2754,6 +2774,7 @@ $("fallbackAnswer").addEventListener("input", () => {
 });
 $("startAnalysis").addEventListener("click", () => void startAnalysis());
 $("restartButton").addEventListener("click", resetFlow);
+$("analysisFailureBack").addEventListener("click", returnToLocationFromFailure);
 $("closePlanDetail").addEventListener("click", () => $("planDetailDialog").close());
 $("planDetailDialog").addEventListener("click", (event) => {
   if (event.target === $("planDetailDialog")) $("planDetailDialog").close();
