@@ -715,3 +715,28 @@ footer > span { text-align: right; }
 @media (max-width: 580px) {
   .market-card { padding-right: 15px; padding-left: 15px; }
 }
+
+/* 首页从首屏以下进入同一块黑色叙事背景；问诊工作台与结果页保持原样。 */
+body[data-product-view="landing"] .fact-error-section,
+body[data-product-view="landing"] .yongge-section,
+body[data-product-view="landing"] .judge,
+body[data-product-view="landing"] .source-note,
+body[data-product-view="landing"] footer {
+  color: white;
+  background: var(--ink);
+}
+body[data-product-view="landing"] .fact-error-section,
+body[data-product-view="landing"] .judge { border-color: rgba(255,255,255,.16); }
+body[data-product-view="landing"] .landing-section-heading h2,
+body[data-product-view="landing"] .judge-heading h2 { color: white; }
+body[data-product-view="landing"] .landing-section-heading p,
+body[data-product-view="landing"] .source-note,
+body[data-product-view="landing"] .source-note p { color: rgba(255,255,255,.58); }
+body[data-product-view="landing"] .fact-contrast { border-color: rgba(255,255,255,.22); }
+body[data-product-view="landing"] .fact-checks { color: white; background: #1d211d; }
+body[data-product-view="landing"] .fact-checks > span { color: var(--green); }
+body[data-product-view="landing"] .fact-checks dl > div { border-color: rgba(255,255,255,.15); }
+body[data-product-view="landing"] .fact-checks dd { color: rgba(255,255,255,.58); }
+body[data-product-view="landing"] .source-note { border-top-color: rgba(255,255,255,.16); }
+body[data-product-view="landing"] footer { border-top: 1px solid rgba(255,255,255,.16); }
+body[data-product-view="landing"] footer > div { color: white; }
