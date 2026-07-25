@@ -21,7 +21,7 @@ for source_file in \
   test_production_asr.mjs \
   test_production_tts.mjs \
   stepfun-client.js \
-  agent-orchestrator.js
+  agent-orchestrator.js \
   storevalidator-worker.mjs
 do
   node --check "$source_file"
