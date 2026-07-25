@@ -1215,7 +1215,10 @@ async function interviewTurn(request, env, caseId) {
   const body = await readJson(request);
   const transcript = trimText(body.answer ?? body.transcript, 4000);
   const source = ["voice", "typed", "choice"].includes(body.source) ? body.source : "voice";
-  if (transcript.length < 2) {
+  // `0` is a complete answer for numeric facts such as debt and must never be
+  // confused with an empty transcript.  The field-specific FactArchive
+  // normalizer below remains responsible for validating its meaning.
+  if (!transcript) {
     return apiJson(request, env, {
       code: "EMPTY_TRANSCRIPT",
       message: "没有识别到有效回答，请继续说或选择不知道"

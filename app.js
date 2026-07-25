@@ -1000,7 +1000,11 @@ async function transcribeRecordedAnswer(wavBuffer) {
     if (!response.ok) throw new Error(data.message || `语音识别失败（${response.status}）`);
     if (!state.interview.active || state.interview.turnId !== snapshot.turnId || state.interview.submitInFlight) return;
     const transcript = String(data.text || "").trim();
-    if (transcript.length < 2) throw new Error("没有识别到有效回答");
+    // A single-character transcript can be a complete, valid answer: most
+    // importantly `0` for debt, cash, costs or planned borrowing.  Treat only
+    // an empty transcription as missing; fact validation happens after the
+    // user confirms the draft.
+    if (!transcript) throw new Error("没有识别到有效回答");
     state.interview.transcript = transcript;
     setAnswerDraft(appendTranscript($("fallbackAnswer").value, transcript), "voice-final");
     $("liveTranscript").textContent = transcript;
@@ -3162,7 +3166,7 @@ document.querySelector("[data-testid=hero-start]").addEventListener("click", (ev
   setProductView("workspace", { scroll: true });
 });
 document.querySelector(".brand").addEventListener("click", (event) => {
-  if (DEMO_MODE) return;
+  if (DEMO_MODE || PUBLIC_CASE_MODE) return;
   event.preventDefault();
   setProductView("landing", { scroll: true });
 });

@@ -183,6 +183,62 @@ try {
     facts: Object.fromEntries(["monthlyRevenue", "variableCostRate", "fixedCostTotal", "cashReserve", "debt", "bottleneck"].map((field) => [field, { field, status: "confirmed", value: 1 }]))
   });
   assert.ok(publicData >= 70 && publicData <= 100);
+  const sharedSnapshot = {
+    stage: "operating",
+    category: "小吃",
+    decision: "TEST",
+    conclusion: "小步验证",
+    decisionTitle: "先验证午市需求",
+    decisionReason: "关键经营信号尚需验证",
+    signals: [{ label: "当前瓶颈", value: "午市客流", status: "confirmed" }],
+    plans: [{ role: "主方案", title: "午市试卖", action: "连续七天记录订单", budgetCap: 500, durationDays: 7, metric: "订单", successLine: "增长", stopLine: "停止" }],
+    evidenceScore: 82
+  };
+  const sharedDb = {
+    prepare(sql) {
+      return {
+        bind(id) {
+          return {
+            async first() {
+              if (sql.includes("FROM public_cases") && id === "public_share_fixture") {
+                return {
+                  id,
+                  source_case_id: "private_case_must_not_leak",
+                  manage_token_hash: "secret_must_not_leak",
+                  snapshot_json: JSON.stringify(sharedSnapshot),
+                  data_score: 82,
+                  outcome_score: 0,
+                  rank_score: 57,
+                  is_active: 1,
+                  created_at: "2026-07-25T00:00:00.000Z",
+                  updated_at: "2026-07-25T01:00:00.000Z"
+                };
+              }
+              return null;
+            }
+          };
+        }
+      };
+    }
+  };
+  const sharedResponse = await worker.fetch(
+    new Request("https://example.com/api/public-cases/public_share_fixture", { headers: { "CF-Connecting-IP": "203.0.113.99" } }),
+    { DB: sharedDb }
+  );
+  assert.equal(sharedResponse.status, 200);
+  const sharedBody = await sharedResponse.json();
+  assert.equal(sharedBody.id, "public_share_fixture");
+  assert.equal(sharedBody.decisionTitle, "先验证午市需求");
+  assert.equal(sharedBody.sourceCaseId, undefined);
+  assert.equal(sharedBody.source_case_id, undefined);
+  assert.equal(sharedBody.manageTokenHash, undefined);
+  assert.equal(sharedBody.manage_token_hash, undefined);
+  assert.equal(JSON.stringify(sharedBody).includes("secret_must_not_leak"), false);
+  const missingSharedResponse = await worker.fetch(
+    new Request("https://example.com/api/public-cases/public_missing", { headers: { "CF-Connecting-IP": "203.0.113.99" } }),
+    { DB: sharedDb }
+  );
+  assert.equal(missingSharedResponse.status, 404);
   const asrConfig = asrSessionConfig({});
   assert.equal(asrConfig.session.audio.input.format.codec, "pcm_s16le");
   assert.equal(asrConfig.session.audio.input.format.rate, 16000);
@@ -526,6 +582,39 @@ try {
   assert.equal(recoveredTurn.mode, "stepfun");
   assert.equal(recoveredTurn.nextQuestion.field, "cashReserve");
   delete env.STEPFUN_API_KEY;
+
+  // Regression: a one-character numeric answer is still a real answer.  In
+  // particular, debt = 0 must be stored and advance the deterministic
+  // interview instead of producing EMPTY_TRANSCRIPT and trapping the user on
+  // the same question.
+  const zeroCaseResponse = await apiRequest("/api/cases", {
+    method: "POST", body: { stage: "operating" }
+  });
+  const zeroCase = await zeroCaseResponse.json();
+  const zeroLocationResponse = await apiRequest(`/api/cases/${zeroCase.case.id}/location`, {
+    method: "POST",
+    token: zeroCase.caseToken,
+    body: { confirmed: true, context: { location: { address: "上海市黄浦区零值回归测试1号" } } }
+  });
+  let zeroVersion = (await zeroLocationResponse.json()).version;
+  for (const [index, answer] of ["100000", "45", "50000", "30000"].entries()) {
+    const response = await apiRequest(`/api/cases/${zeroCase.case.id}/turns`, {
+      method: "POST", token: zeroCase.caseToken,
+      body: { turnId: `turn-zero-leading-${index}`, transcript: answer, caseVersion: zeroVersion }
+    });
+    assert.equal(response.status, 200);
+    const payload = await response.json();
+    zeroVersion = payload.version;
+  }
+  const zeroDebtResponse = await apiRequest(`/api/cases/${zeroCase.case.id}/turns`, {
+    method: "POST", token: zeroCase.caseToken,
+    body: { turnId: "turn-zero-debt", transcript: "0", caseVersion: zeroVersion }
+  });
+  assert.equal(zeroDebtResponse.status, 200);
+  const zeroDebtTurn = await zeroDebtResponse.json();
+  const zeroDebtFact = zeroDebtTurn.extractedFacts.find((fact) => fact.field === "debt");
+  assert.equal(zeroDebtFact.value, 0);
+  assert.notEqual(zeroDebtTurn.nextQuestion.field, "debt");
 
   const reviewCorrections = [
     {
