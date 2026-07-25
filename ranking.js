@@ -20,6 +20,7 @@ function decisionClass(item) {
 }
 
 let currentCases = [];
+let initialCasesRendered = false;
 
 function renderCards(cases) {
   if (!cases.length) {
@@ -131,8 +132,14 @@ async function loadLeaderboard() {
     const response = await fetch("/api/leaderboard");
     const data = await response.json();
     if (!response.ok) throw new Error(data.message || "案例榜暂时不可用");
+    // Replacing the small loading line with a long list used to trigger browser
+    // scroll anchoring: the page jumped past its title on the first load.
+    // Preserve an intentional reader scroll, but keep a new visit at the top.
+    const shouldStayAtTop = !initialCasesRendered && window.scrollY < 4;
     currentCases = Array.isArray(data.cases) ? data.cases : [];
     renderCards(currentCases);
+    initialCasesRendered = true;
+    if (shouldStayAtTop) requestAnimationFrame(() => window.scrollTo(0, 0));
   } catch (error) {
     list.innerHTML = `<p>${escapeHtml(error.message)}</p>`;
   }

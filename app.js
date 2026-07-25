@@ -154,10 +154,6 @@ const DEMO_CASE = {
     ["cashReserve", "这个没细算过。"],
     ["debt", "我不知道，没有单独算过。"],
     ["channel", "堂食为主，外卖现在只能做随机搭配。"],
-    ["trafficMatch", "这个没有专门数过。"],
-    ["visibility", "我不知道，没有做过专门测试。"],
-    ["retention", "这个没有专门统计过。"],
-    ["initialInvestment", "一开始总共投了十三万左右。"],
     ["lease", "房租已经交了一年，合同也签了一年。"]
   ]
 };
@@ -1428,7 +1424,7 @@ function setDemoQuestion(question, index) {
   $("currentQuestion").dataset.factId = question.id;
   $("currentQuestion").dataset.factKind = question.kind || "text";
   $("currentQuestion").dataset.factLabel = question.label || FACT_LABELS[question.id] || "事实";
-  $("questionProgress").textContent = `第 ${index + 1} / ${DEMO_CASE.turns.length}`;
+  $("questionProgress").textContent = `${index + 1}/12`;
   $("questionHint").textContent = "正在按运城小碗菜的真实案例逐题填入。";
 }
 

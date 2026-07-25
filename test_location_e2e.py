@@ -60,7 +60,10 @@ def fulfill_json(route: Route, body: dict[str, Any], status: int = 200) -> None:
 def api_fixture(route: Route) -> None:
     path = route.request.url.split("?", 1)[0]
     if path.endswith("/api/leaderboard"):
-        fulfill_json(route, {"cases": []})
+        fulfill_json(route, {"cases": [
+            {"location": "上海 · 黄浦", "category": "咖啡", "decision": "TEST", "statusLine": "先验证工作日午间需求"},
+            {"location": "杭州 · 余杭", "category": "快餐", "decision": "GO", "statusLine": "现金流稳定，可继续经营"},
+        ]})
         return
     if path.endswith("/api/map/static"):
         route.fulfill(
@@ -511,7 +514,7 @@ def test_subtitle_case_demo(browser, base_url: str) -> None:
     context = browser.new_context(base_url=base_url, locale="zh-CN")
     page = context.new_page()
     errors = attach_error_collection(page)
-    page.goto("/?demo=1&demoSpeed=40", wait_until="domcontentloaded")
+    page.goto("/?demo=1&demoSpeed=750", wait_until="domcontentloaded")
     expect(page.locator("body")).to_have_class("demo-mode")
     expect(page.locator("#category")).to_have_value("私房小碗菜")
     expect(page.locator('[data-stage="operating"]')).to_have_class("selected")
@@ -519,6 +522,7 @@ def test_subtitle_case_demo(browser, base_url: str) -> None:
     expect(page.locator("#locationProof")).to_be_visible(timeout=3_000)
     expect(page.locator("#mapAddress")).to_contain_text("稷山县")
     page.locator("#beginInterview").click()
+    expect(page.locator("#questionProgress")).to_have_text("1/12", timeout=3_000)
     expect(page.locator('[data-panel="review"]')).to_be_visible(timeout=12_000)
     expect(page.locator(".review-receipt-meta")).to_contain_text("事实核对单")
     rows = page.locator('[data-testid="fact-review-row"]')
@@ -535,6 +539,16 @@ def test_subtitle_case_demo(browser, base_url: str) -> None:
     context.close()
 
 
+def test_ranking_initial_render_stays_at_top(browser, base_url: str) -> None:
+    context = browser.new_context(base_url=base_url, locale="zh-CN")
+    page = context.new_page()
+    page.route("**/api/**", api_fixture)
+    page.goto("/ranking.html", wait_until="domcontentloaded")
+    expect(page.locator(".rank-card")).to_have_count(2)
+    assert page.evaluate("window.scrollY") == 0
+    context.close()
+
+
 def main() -> None:
     with LocalSite() as site, sync_playwright() as playwright:
         browser = playwright.chromium.launch(headless=True)
@@ -546,6 +560,7 @@ def main() -> None:
             test_site_report_renders_ranked_direction_titles(browser, site.url)
             test_mobile_review_layout(browser, site.url)
             test_subtitle_case_demo(browser, site.url)
+            test_ranking_initial_render_stays_at_top(browser, site.url)
         finally:
             browser.close()
     print("browser E2E: location, fallback, full review, site-result rendering, report failure recovery, mobile layout, subtitle demo, Top3 and number semantics passed")

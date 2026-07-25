@@ -616,64 +616,37 @@ footer > span { text-align: right; }
 }
 .brand-mark, .brand-logo, .brand-logo.small, .brand-mark.small { border-radius: 0 !important; }
 
-/* Home: a compact ledger beside the decision invitation, not a stack of
-   floating marketing cards. */
+/* Home keeps the established split layout: a clear decision invitation on the
+   left and three independent market signals on the right.  The StoreValidator
+   migration changes edge treatment, not the content hierarchy. */
 .hero {
-  min-height: 600px;
-  gap: clamp(34px, 6vw, 90px);
-  border-bottom: 1px dashed rgba(255,255,255,.32);
-}
-.hero-copy { display: grid; align-content: center; }
-.hero-ledger {
-  max-width: 670px;
-  padding: 9px 0;
-  display: flex;
-  justify-content: space-between;
-  gap: 16px;
-  color: rgba(255,255,255,.55);
-  border-top: 1px dashed rgba(255,255,255,.32);
-  border-bottom: 1px dashed rgba(255,255,255,.32);
-  font: 750 10px/1.3 var(--font-mono);
-  letter-spacing: .08em;
+  min-height: 560px;
+  gap: clamp(42px, 8vw, 118px);
+  border-bottom: 0;
 }
 .hero-actions {
-  max-width: 670px;
-  display: grid;
-  grid-template-columns: 1.12fr .88fr;
-  gap: 0;
-  border: 1px solid rgba(255,255,255,.32);
+  max-width: 620px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
 }
 .hero-actions .primary-button, .hero-actions .demo-button, .hero-actions .ranking-button {
-  min-height: 58px;
+  flex: 1 1 100%;
+  min-height: 52px;
   margin: 0;
-  border: 0;
   border-radius: 0 !important;
 }
-.hero-actions .primary-button { border-right: 1px solid var(--ink); }
-.hero-actions .demo-button { border-top: 1px solid rgba(255,255,255,.26); border-right: 1px solid rgba(255,255,255,.26); }
-.hero-actions .ranking-button { border-top: 1px solid rgba(255,255,255,.26); }
 .market-signal {
-  gap: 0;
-  align-content: start;
-  border: 1px solid rgba(255,255,255,.28);
-}
-.market-signal-heading {
-  padding: 15px 18px;
-  display: grid;
-  gap: 6px;
-  border-bottom: 1px dashed rgba(255,255,255,.28);
-}
-.market-signal-heading span { color: var(--green); font: 800 10px/1 var(--font-mono); letter-spacing: .1em; }
-.market-signal-heading b { color: rgba(255,255,255,.82); font-size: 13px; line-height: 1.45; }
-.market-card {
-  padding: 17px 18px;
+  gap: 12px;
+  align-content: center;
   border: 0;
-  border-bottom: 1px dashed rgba(255,255,255,.28);
-  border-radius: 0 !important;
-  background: transparent;
 }
-.market-card:last-child { border-bottom: 0; }
-.market-arrow { display: none; }
+.market-card {
+  padding: 20px 22px;
+  border: 1px solid rgba(255,255,255,.18);
+  border-radius: 0 !important;
+  background: rgba(255,255,255,.055);
+}
 
 /* The components shared by the interview, report, map and public cases. */
 .flow-card, .rank-card, .map-summary, .map-picker, .analysis-failure, .result-main, .result-metrics, .narrative, .preopen-recommendation {
@@ -689,8 +662,9 @@ footer > span { text-align: right; }
   box-shadow: 5px 5px 0 var(--green);
 }
 .rank-badge, .preopen-decision, .plan-score, .preopen-validate-meta span { border-radius: 0 !important; }
-.rank-card-foot, .result-metrics article, .plan-meta div, .execution-checklist, .rejected,
-.result-fact-list article, .result-fact-evidence article { border-style: dashed; }
+/* Dashed rules have one meaning: a detachable receipt / secondary evidence.
+   Primary cards and numeric summaries stay solid so scanning remains calm. */
+.rejected, .result-fact-list article, .result-fact-evidence article { border-style: dashed; }
 
 .choice-grid button, .category-chips button, .primary-button, .secondary-button, .danger-button, .confirm-location, .panel-demo-link {
   border-radius: 0 !important;
@@ -708,22 +682,18 @@ footer > span { text-align: right; }
 /* The two report modes use the same receipt anatomy. */
 .result-main { border: 1px solid var(--ink); }
 .result-metrics, .narrative { border-color: var(--ink); }
-.result-metrics article { border-right: 1px dashed var(--line); }
+.result-metrics article { border-right: 1px solid var(--line); }
 .narrative { border-top: 0; }
 .plan-card, .preopen-rank-card, .preopen-rank-number, .plan-score, .preopen-decision, .preopen-signal-row {
   border-radius: 0 !important;
 }
 .plan-card, .preopen-rank-card { border-color: var(--ink); }
 .plan-card:first-child, .preopen-rank-card.is-primary { box-shadow: 6px 6px 0 var(--green); }
-.preopen-signal-row { border-style: dashed; }
-.preopen-signal-row > div { border-right-style: dashed; }
 .preopen-rank-reasons > div, .preopen-rank-validate, .preopen-rank-order, .plan-meta div, .plan-lines, .execution-checklist {
   border-radius: 0 !important;
 }
-.preopen-rank-reasons > div, .plan-meta div { border: var(--receipt-dash); }
-.preopen-rank-validate { border-style: dashed; }
-.plan-lines { border: 1px dashed #b8c8f0; }
-.preopen-ranking-explanation { border-bottom-style: dashed; }
+.preopen-rank-reasons > div, .plan-meta div { border: 1px solid var(--line); }
+.plan-lines { border: 1px solid #b8c8f0; }
 
 /* Dialogs and map stay functional but no longer introduce a separate soft UI. */
 .case-detail-dialog, .plan-detail-dialog, .dialog-close, .location-status, .location-proof {
@@ -736,20 +706,12 @@ footer > span { text-align: right; }
 .map-picker-pin { box-shadow: none; }
 .map-picker-canvas, .map-picker-toolbar, .location-proof, .location-status { border-radius: 0 !important; }
 
-.landing-section { border-bottom: 1px dashed var(--line); }
 .fact-contrast, .yongge-proof { border-color: var(--ink); }
-.actual-speech blockquote, .fact-checks dl > div { border-top-style: dashed; }
-.yongge-proof article { border-right-style: dashed; border-bottom-style: dashed; }
 
 @media (max-width: 820px) {
-  .hero-actions { grid-template-columns: 1fr; }
-  .hero-actions .primary-button, .hero-actions .demo-button { border-right: 0; }
-  .hero-actions .demo-button, .hero-actions .ranking-button { border-top: 1px solid rgba(255,255,255,.26); }
-  .result-metrics article { border-right: 0; border-bottom: 1px dashed var(--line); }
+  .result-metrics article { border-right: 0; border-bottom: 1px solid var(--line); }
 }
 
 @media (max-width: 580px) {
-  .hero-ledger { font-size: 9px; }
-  .hero-ledger span:last-child { display: none; }
-  .market-signal-heading, .market-card { padding-right: 15px; padding-left: 15px; }
+  .market-card { padding-right: 15px; padding-left: 15px; }
 }
