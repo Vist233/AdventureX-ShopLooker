@@ -116,8 +116,11 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, summary:focus
 }
 .eyebrow, .section-kicker { color: var(--ink); font: 750 11px/1.2 ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: .15em; text-transform: uppercase; }
 .eyebrow { display: inline-block; padding: 6px 10px; border: 1px solid var(--ink); }
-.hero h1 { max-width: 850px; margin: 18px 0 22px; font-size: clamp(55px, 7vw, 100px); line-height: .98; letter-spacing: -.065em; }
-.hero h1 em { padding: 0 .08em; color: var(--paper); background: var(--ink); font-style: normal; box-decoration-break: clone; -webkit-box-decoration-break: clone; }
+.hero h1 { max-width: 720px; margin: 18px 0 22px; font-size: clamp(50px, 5.6vw, 82px); line-height: 1.04; letter-spacing: -.05em; }
+/* The previous inverted blocks made the opening sentence read like a stack of
+   black slabs. Keep the two decision amounts distinct, but use a restrained
+   thermal-paper underline so the phrase remains legible at desktop scale. */
+.hero h1 em { padding: 0 .025em; color: var(--ink); background: linear-gradient(transparent 72%, var(--thermal-gray) 0); font-style: normal; box-decoration-break: clone; -webkit-box-decoration-break: clone; }
 .hero > div:first-child > p { max-width: 670px; margin: 0 0 34px; color: var(--muted); font-size: 18px; line-height: 1.75; }
 .hero-shortline { margin-top: -17px !important; color: var(--ink) !important; font-weight: 780; }
 .hero-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 11px; }
@@ -540,7 +543,7 @@ footer > span { text-align: right; }
 @media (max-width: 580px) {
   .topbar-proof { max-width: 160px; text-align: right; }
   .hero { padding: 62px 18px 55px; }
-  .hero h1 { font-size: 52px; }
+  .hero h1 { font-size: 50px; }
   .market-scale, .market-closure, .market-early { margin-right: 0; margin-left: 0; }
   .landing-conclusion { align-items: flex-start; flex-direction: column; gap: 10px; }
   .landing-section { padding: 72px 18px; }
