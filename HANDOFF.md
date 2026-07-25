@@ -8,11 +8,11 @@
 
 ## 当前状态
 
-Cloudflare Worker 名称为 `yongge`，技术栈为 Worker + Static Assets + D1 + Queue + Durable Object。`main` 最新提交：`20ed41c`（已推送 `origin/main`）。已部署版本 `9e4c574f-8f48-41ae-b5f4-d6cf7087cd80`，主站与演示站均正常。
+Cloudflare Worker 名称为 `yongge`，技术栈为 Worker + Static Assets + D1 + Queue + Durable Object。`main` 最新提交：`6e3d515`（已推送 `origin/main`）。主站与演示站均正常。
 
 2026-07-25 本次修复：完整分析已取消按日、按 IP 的次数限制；Worker 不再调用 `consumeDailyAnalysisBudget()`。选址报告任意失败都会进入可返回的失败卡，不会错误显示 100% 后留在空白结果页。已补浏览器回归覆盖此失败状态；生产临时案卷实测在旧 IP 已触及原限制的情况下仍成功完成一份报告，随后已删除测试案卷。
 
-2026-07-25 后续界面与数据链路修订：演示站只播放文字，不调用 TTS；问诊页统一显示 `第 X / 12`。准备开店的结果卡不再展示 POI 样本/“地图口径”第三行，而会在主结论和说明区直接列出推荐 A/B/C 的品类标题与各自理由。`DELETE /api/cases/:id` 现先删除该案卷全部 `analysis_runs`，再删案卷，避免 D1 私有记录孤儿化。生产实测：正常经营案卷完成后匿名发布成功且 `GET /api/leaderboard` 可见（测试快照已下架）；预开店案卷完成后可按同一案卷令牌读取保存的 `site-map` 报告，删除后 D1 中案卷和运行记录均为 0。`test_production_e2e.py` 已扩展这两项验收；某次重复的真实 Agent 搜索在上游生成阶段长时间不返回而被手动终止并清理，不是持久化或排行榜逻辑失败。
+2026-07-25 后续界面与数据链路修订：演示站只播放文字，不调用 TTS；问诊页统一显示 `X/12`。准备开店的结果卡不再展示 POI 样本/“地图口径”第三行，而会在主结论和说明区直接列出推荐 A/B/C 的品类标题与各自理由。`DELETE /api/cases/:id` 现先删除该案卷全部 `analysis_runs`，再删案卷，避免 D1 私有记录孤儿化。生产实测：正常经营案卷完成后匿名发布成功且 `GET /api/leaderboard` 可见（测试快照已下架）；预开店案卷完成后可按同一案卷令牌读取保存的 `site-map` 报告，删除后 D1 中案卷和运行记录均为 0。`test_production_e2e.py` 已扩展这两项验收；某次重复的真实 Agent 搜索在上游生成阶段长时间不返回而被手动终止并清理，不是持久化或排行榜逻辑失败。
 
 在既有问诊/分析链路之上，最近三轮新增了「preopen 地图直出选址报告」能力（细节见下文专节）：
 
