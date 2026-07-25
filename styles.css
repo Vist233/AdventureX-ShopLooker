@@ -418,6 +418,10 @@ body.demo-mode .fact-review-row.demo-tapped { animation: demoTap .28s ease-out; 
 .narrative { padding: 22px; background: #f5f4ee; border: 1px solid var(--line); border-top: 0; line-height: 1.75; }
 .narrative h3 { margin: 0 0 8px; }
 .narrative p { margin: 0; color: var(--muted); }
+.site-direction-list { display: grid; gap: 10px; }
+.site-direction-list p { display: grid; grid-template-columns: minmax(138px, 26%) 1fr; gap: 12px; align-items: start; padding: 12px 14px; background: rgba(255,255,255,.58); border-left: 3px solid var(--green-dark); }
+.site-direction-list b { color: var(--ink); }
+.site-direction-list span { color: var(--muted); }
 .plans-heading { margin: 34px 0 15px; display: flex; justify-content: space-between; align-items: end; gap: 20px; }
 .plans-heading h3 { margin: 7px 0 0; font-size: 31px; }
 .plans-heading > span { color: var(--muted); font-size: 12px; }
@@ -496,4 +500,5 @@ footer > span { text-align: right; }
   .interview-controls button, .result-actions button { width: 100%; }
   .plans-heading { align-items: flex-start; flex-direction: column; }
   .plan-meta { grid-template-columns: 1fr; }
+  .site-direction-list p { grid-template-columns: 1fr; gap: 5px; }
 }

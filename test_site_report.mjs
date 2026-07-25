@@ -59,6 +59,7 @@ const emptyEnvironment = [
   assert.ok(["GO", "TEST", "STOP"].includes(result.deterministic.decision));
   assert.equal(result.siteMetrics.length, 3, "always emit 3 metric cards");
   assert.equal(result.siteMetrics[0].label, "800米同类竞品");
+  assert.equal("hint" in result.siteMetrics[0], false, "site metric cards should not render a misleading third text line");
   assert.ok(result.explanation.caution.includes("现场"), "caution must warn to verify on-site");
   assert.ok(result.narrative.title && result.narrative.body);
   // Each card renders `mechanism` (why this category fits) as its body, so every

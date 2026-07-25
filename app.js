@@ -1111,11 +1111,7 @@ function askQuestion(question, index = null) {
   $("currentQuestion").dataset.factKind = question.kind || "text";
   $("currentQuestion").dataset.factLabel = question.label || FACT_LABELS[question.id] || "事实";
   const current = Math.max(1, state.interview.questionIndex + 1);
-  const coreTarget = state.interview.progress?.coreTarget || 6;
-  const maxTurns = state.interview.progress?.maxTurns || 12;
-  $("questionProgress").textContent = current <= coreTarget
-    ? `第 ${current} / ${coreTarget} · 最多补至 ${maxTurns}`
-    : `补充第 ${current - coreTarget} 题 · 已答 ${current} / 最多 ${maxTurns}`;
+  $("questionProgress").textContent = `第 ${current} / 12`;
   setInterviewBusy(false);
   void speakQuestion(question.text, question.audioUrl);
 }
@@ -1299,19 +1295,6 @@ async function typeDemoText(element, text, token, delay = 18) {
   return true;
 }
 
-function speakDemoQuestion(text) {
-  if (!("speechSynthesis" in window)) return;
-  try {
-    window.speechSynthesis.cancel();
-    const utterance = new SpeechSynthesisUtterance(text);
-    utterance.lang = "zh-CN";
-    utterance.rate = 1.12;
-    window.speechSynthesis.speak(utterance);
-  } catch (_) {
-    // The visual stream remains the source of truth when device TTS is absent.
-  }
-}
-
 function setDemoQuestion(question, index) {
   state.interview.questionIndex = index;
   state.interview.turnId = `demo-turn-${index + 1}`;
@@ -1355,10 +1338,9 @@ async function startDemoInterview() {
     const prepared = { id: question[0], text: question[1], kind: question[2], label: question[3] };
     setDemoQuestion(prepared, index);
     $("fallbackAnswer").value = "";
-    setListening("", "AI 正在提问");
+    setListening("", "正在展示案例问题");
     const questionComplete = await typeDemoText($("currentQuestion"), prepared.text, token, DEMO_CHAR_MS);
     if (!questionComplete) return;
-    speakDemoQuestion(prepared.text);
     await wait(Math.min(500, DEMO_TURN_MS * .16));
     setListening("live", "正在展示案例回答");
     const answerComplete = await typeDemoText($("fallbackAnswer"), answer, token, DEMO_CHAR_MS);
@@ -1371,7 +1353,6 @@ async function startDemoInterview() {
   if (token !== state.demoPlaybackToken) return;
   state.interview.active = false;
   state.interview.complete = true;
-  if ("speechSynthesis" in window) window.speechSynthesis.cancel();
   prepareReview();
   $("submitReview").textContent = "下一步：查看判断";
   $("reviewFormStatus").textContent = "已用运城小碗菜的真实数据填好这份档案，不影响后续分析；直接点下一步继续。";
@@ -2405,7 +2386,7 @@ function renderAnalysisResult(data) {
 
   let metricCards = [];
   if (isSite && Array.isArray(data.siteMetrics) && data.siteMetrics.length) {
-    metricCards = data.siteMetrics.map((metric) => [metric.label, metric.value, metric.hint || ""]);
+    metricCards = data.siteMetrics.map((metric) => [metric.label, metric.value, ""]);
   } else {
     if (Number.isFinite(metrics.breakEvenDaily)) {
       metricCards.push(["日保本营业额", `¥${money.format(metrics.breakEvenDaily)}`, Number.isFinite(metrics.breakEvenOrders) ? `约 ${Math.ceil(metrics.breakEvenOrders)} 单/天` : ""]);
@@ -2418,14 +2399,23 @@ function renderAnalysisResult(data) {
     while (metricCards.length < 3) metricCards.push(["仍需确认", "待补数据", "未知不会被当成 0"]);
   }
   $("resultMetrics").innerHTML = metricCards.slice(0, 3).map(([label, value, hint]) => `
-    <article><span>${escapeHtml(label)}</span><strong>${escapeHtml(value)}</strong><small>${escapeHtml(hint)}</small></article>
+    <article><span>${escapeHtml(label)}</span><strong>${escapeHtml(value)}</strong>${hint ? `<small>${escapeHtml(hint)}</small>` : ""}</article>
   `).join("");
 
-  const narrative = data.narrative || data.explanation || {};
-  $("narrative").innerHTML = `<h3>${escapeHtml(narrative.title || narrative.headline || "为什么这样判断")}</h3><p>${escapeHtml(narrative.body || narrative.diagnosis || assessment.reason || "")}</p>`;
-  renderResultFactEvidence();
   const plans = (data.topPlans || data.top3 || data.plans || []).slice(0, isSite ? 3 : 2).map(normalizePlan);
   const evidenceTasks = (data.evidence_tasks || []).slice(0, 1).map(normalizePlan);
+  const narrative = data.narrative || data.explanation || {};
+  const siteDirections = isSite && data.reportType === "recommend"
+    ? plans.map((plan) => `${plan.bottleneck.replace(/^推荐/, "")} · ${plan.title}`).join("　")
+    : "";
+  if (siteDirections) {
+    $("decisionTitle").textContent = "优先验证这 3 个方向";
+    $("decisionReason").textContent = siteDirections;
+    $("narrative").innerHTML = `<h3>为什么是这 3 个方向</h3><div class="site-direction-list">${plans.map((plan) => `<p><b>${escapeHtml(plan.bottleneck.replace(/^推荐/, ""))} · ${escapeHtml(plan.title)}</b><span>${escapeHtml(plan.mechanism || plan.action)}</span></p>`).join("")}</div>`;
+  } else {
+    $("narrative").innerHTML = `<h3>${escapeHtml(narrative.title || narrative.headline || "为什么这样判断")}</h3><p>${escapeHtml(narrative.body || narrative.diagnosis || assessment.reason || "")}</p>`;
+  }
+  renderResultFactEvidence();
   $("candidateCount").textContent = isSite
     ? (data.reportType === "recommend" ? "按客群与竞争排序的 3 个方向" : "落地与验证建议")
     : (plans.length > 1 ? "主方案 + 已核验备选" : plans.length ? "主方案" : "");

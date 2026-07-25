@@ -233,19 +233,19 @@ def test_location_and_text_fallback(browser, base_url: str) -> None:
     expect(page.locator('[data-panel="interview"]')).to_be_visible()
     expect(page.locator("#textFallback")).to_be_visible(timeout=8_000)
     expect(page.locator("#currentQuestion")).to_contain_text("最想解决")
-    expect(page.locator("#questionProgress")).to_contain_text("第 1 / 6 · 最多补至 12")
+    expect(page.locator("#questionProgress")).to_contain_text("第 1 / 12")
 
     page.locator("#fallbackAnswer").fill("最近亏损，想先止损")
     page.locator("#textFallback button[type=submit]").click()
     expect(page.locator("#currentQuestion")).to_contain_text("一个月", timeout=5_000)
-    expect(page.locator("#questionProgress")).to_contain_text("第 2 / 6 · 最多补至 12")
+    expect(page.locator("#questionProgress")).to_contain_text("第 2 / 12")
     page.locator("#previousQuestion").click()
     expect(page.locator("#currentQuestion")).to_contain_text("最想解决")
-    expect(page.locator("#questionProgress")).to_contain_text("第 1 / 6 · 最多补至 12")
+    expect(page.locator("#questionProgress")).to_contain_text("第 1 / 12")
     page.locator("#fallbackAnswer").fill("最近亏损，想先止损")
     page.locator("#textFallback button[type=submit]").click()
     expect(page.locator("#currentQuestion")).to_contain_text("一个月", timeout=5_000)
-    expect(page.locator("#questionProgress")).to_contain_text("第 2 / 6 · 最多补至 12")
+    expect(page.locator("#questionProgress")).to_contain_text("第 2 / 12")
     page.locator("#fallbackAnswer").fill("一个月大约十二万")
     page.locator("#textFallback button[type=submit]").click()
     page.evaluate("() => finishInterview()")
@@ -396,6 +396,41 @@ def test_site_report_failure_is_not_rendered_as_complete(browser, base_url: str)
     context.close()
 
 
+def test_site_report_renders_ranked_direction_titles(browser, base_url: str) -> None:
+    """Pre-open results must show the three category titles, not generic map prose."""
+    context = browser.new_context(base_url=base_url, locale="zh-CN")
+    page = context.new_page()
+    errors = attach_error_collection(page)
+    page.goto("/", wait_until="domcontentloaded")
+    page.evaluate(
+        """() => renderAnalysisResult({
+          reportMode: 'site-map', reportType: 'recommend',
+          deterministic: { decision: 'TEST', title: '这个位置更适合开什么', reason: '旧的通用说明' },
+          siteMetrics: [
+            { label: '800米同类竞品', value: '20 个', hint: '地图口径，不代表真实客流' },
+            { label: '写字楼/公司', value: '11 处', hint: '未来科技城学术交流中心综合楼' },
+            { label: '住宅小区', value: '6 处', hint: '师范大学博文苑' }
+          ],
+          topPlans: [
+            { id: 'site-1', bottleneck: '推荐A', title: '现制茶饮 / 咖啡', mechanism: '写字楼客群高频复购', action: '午高峰蹲点', budgetCap: 500, durationDays: 3, metric: '有效订单', successLine: '达标', stopLine: '不达标' },
+            { id: 'site-2', bottleneck: '推荐B', title: '快餐 / 简餐', mechanism: '午晚刚需', action: '晚高峰蹲点', budgetCap: 500, durationDays: 3, metric: '有效订单', successLine: '达标', stopLine: '不达标' },
+            { id: 'site-3', bottleneck: '推荐C', title: '小吃 / 夜宵', mechanism: '夜间需求', action: '夜间蹲点', budgetCap: 500, durationDays: 3, metric: '有效订单', successLine: '达标', stopLine: '不达标' }
+          ]
+        })"""
+    )
+    expect(page.locator("#decisionTitle")).to_have_text("优先验证这 3 个方向")
+    expect(page.locator("#decisionReason")).to_contain_text("现制茶饮 / 咖啡")
+    expect(page.locator("#decisionReason")).to_contain_text("快餐 / 简餐")
+    expect(page.locator("#decisionReason")).to_contain_text("小吃 / 夜宵")
+    expect(page.locator("#narrative")).to_contain_text("A · 现制茶饮 / 咖啡")
+    expect(page.locator("#resultMetrics")).not_to_contain_text("地图口径，不代表真实客流")
+    expect(page.locator("#resultMetrics")).not_to_contain_text("未来科技城学术交流中心综合楼")
+    expect(page.locator("#resultMetrics")).not_to_contain_text("师范大学博文苑")
+    if errors:
+        raise AssertionError("选址结果渲染产生错误：" + " | ".join(errors))
+    context.close()
+
+
 def test_mobile_review_layout(browser, base_url: str) -> None:
     context = browser.new_context(
         base_url=base_url,
@@ -470,11 +505,12 @@ def main() -> None:
             test_location_and_text_fallback(browser, site.url)
             test_gps_and_number_semantics(browser, site.url)
             test_site_report_failure_is_not_rendered_as_complete(browser, site.url)
+            test_site_report_renders_ranked_direction_titles(browser, site.url)
             test_mobile_review_layout(browser, site.url)
             test_subtitle_case_demo(browser, site.url)
         finally:
             browser.close()
-    print("browser E2E: location, fallback, full review, report failure recovery, mobile layout, subtitle demo, Top3 and number semantics passed")
+    print("browser E2E: location, fallback, full review, site-result rendering, report failure recovery, mobile layout, subtitle demo, Top3 and number semantics passed")
 
 
 if __name__ == "__main__":

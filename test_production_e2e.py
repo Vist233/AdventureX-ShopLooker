@@ -3,7 +3,7 @@
 
 This test deliberately exercises the public Worker API without reading any
 local API key. It creates one short-lived case, calls TTS once, launches the
-paid 3-candidate Agent search, verifies the completed result, and deletes the
+paid 2-candidate Agent search, verifies the completed result, and deletes the
 case in a ``finally`` block.
 
 The production target requires ``--confirm-paid-analysis`` so an accidental
@@ -169,27 +169,18 @@ def confirmed_fact(
 def review_fixture() -> list[dict[str, Any]]:
     """Return a complete but explicitly synthetic operating-store case."""
     return [
-        confirmed_fact("stage", "operating"),
-        confirmed_fact("goal", "先止损，再验证是否值得继续"),
-        confirmed_fact("category", "快餐"),
-        confirmed_fact("targetCustomer", "附近工作日午餐的上班族"),
         confirmed_fact("monthlyRevenue", 120_000, unit="元", period="月"),
         confirmed_fact("dailyOrders", 95, unit="单", period="日"),
         confirmed_fact("avgTicket", 42, unit="元", period="单"),
         confirmed_fact("variableCostRate", 55, unit="%", period="sale"),
-        confirmed_fact("rent", 18_000, unit="元", period="月"),
-        confirmed_fact("labor", 32_000, unit="元", period="月"),
-        confirmed_fact("ownerReplacementWage", 10_000, unit="元", period="月"),
-        confirmed_fact("otherFixed", 8_000, unit="元", period="月"),
+        confirmed_fact("fixedCostTotal", 68_000, unit="元", period="月"),
         confirmed_fact("cashReserve", 150_000, unit="元"),
         confirmed_fact("debt", 0, unit="元"),
-        confirmed_fact("staffCount", 5, unit="人"),
-        confirmed_fact("staffCapacity", "午高峰偶尔排队，其他时段有空闲"),
-        confirmed_fact("staffSchedule", "早班2人，午高峰5人，晚班3人"),
+        confirmed_fact("bottleneck", "午高峰门头转化和客流不足"),
+        confirmed_fact("channelMix", "外卖略多于堂食"),
         confirmed_fact("trafficMatch", "yes"),
         confirmed_fact("visibility", "no"),
-        confirmed_fact("retention", "unknown"),
-        confirmed_fact("lease", "剩余18个月，无新增转让费"),
+        confirmed_fact("retention", "no"),
     ]
 
 
@@ -215,11 +206,11 @@ def deterministic_fixture() -> dict[str, Any]:
 
 
 def validate_audited_candidates(result: dict[str, Any]) -> None:
-    require(result.get("requested") == 3, "Agent search did not request exactly 3 candidates")
-    require(result.get("generated") == 3, "Agent search did not produce 3 audited candidates")
+    require(result.get("requested") == 2, "Agent search did not request exactly 2 candidates")
+    require(result.get("generated") == 2, "Agent search did not produce 2 audited candidates")
     require(result.get("mode") == "stepfun-search", "Agent search fell back instead of using StepFun")
     audited = result.get("audited")
-    require(isinstance(audited, list) and len(audited) == 3, "audited candidate list must contain 3 items")
+    require(isinstance(audited, list) and len(audited) == 2, "audited candidate list must contain 2 items")
     for index, audit in enumerate(audited, start=1):
         require(isinstance(audit, dict), f"audited candidate {index} is not an object")
         candidate = audit.get("candidate")
@@ -344,7 +335,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--confirm-paid-analysis",
         action="store_true",
-        help="acknowledge that production analysis makes roughly 9 StepFun Agent calls",
+        help="acknowledge that production analysis makes multiple paid StepFun Agent calls",
     )
     parser.add_argument("--json", action="store_true", help="emit the final summary as JSON")
     return parser.parse_args()
@@ -355,8 +346,8 @@ def main() -> int:
     client = ApiClient(args.base_url, args.request_timeout)
     if client.hostname == "shopvalidator.zhangyvjing.com" and not args.confirm_paid_analysis:
         raise AcceptanceError(
-            "production target requires --confirm-paid-analysis because the 3-plan "
-            "search makes roughly 9 paid StepFun calls"
+            "production target requires --confirm-paid-analysis because the search "
+            "makes multiple paid StepFun calls"
         )
     require(args.analysis_timeout >= 60, "--analysis-timeout must be at least 60 seconds")
     require(args.poll_interval >= 0.5, "--poll-interval must be at least 0.5 seconds")
@@ -367,6 +358,11 @@ def main() -> int:
     case_id = ""
     token = ""
     deleted = False
+    public_id = ""
+    public_manage_token = ""
+    site_case_id = ""
+    site_token = ""
+    site_deleted = False
     summary: dict[str, Any] = {
         "baseUrl": client.base_url,
         "static": False,
@@ -376,14 +372,16 @@ def main() -> int:
         "analysis": False,
         "reused": False,
         "planStarted": False,
+        "publishedToLeaderboard": False,
+        "siteReportPersisted": False,
         "deleted": False,
     }
     started = time.monotonic()
     try:
-        log("[1/9] Checking the deployed page and application bundle")
+        log("[1/12] Checking the deployed page and application bundle")
         page = client.request("GET", "/", expected=(200,), limit=MAX_STATIC_BYTES, accept="text/html")
         html = page.body.decode("utf-8", errors="replace")
-        require("店判" in html and "开始问诊并持续录音" in html, "deployed HTML is not 店判 2.1")
+        require("勇哥判店" in html and 'id="beginInterview"' in html, "deployed HTML is not the current 店判 flow")
         bundle = client.request(
             "GET",
             "/app.js",
@@ -395,14 +393,14 @@ def main() -> int:
         require("startAnalysis" in script and "startDemoInterview" in script, "deployed app bundle is incomplete")
         summary["static"] = True
 
-        log("[2/9] Creating a disposable case")
+        log("[2/12] Creating a disposable case")
         created = client.json("POST", "/api/cases", payload={"stage": "operating"}, expected=(201,))
         case_id = str(created.get("case", {}).get("id") or "")
         token = str(created.get("caseToken") or "")
         require(case_id.startswith("case_"), "case creation returned an invalid id")
         require(token.startswith("token_"), "case creation returned an invalid access token")
 
-        log("[3/9] Resolving and confirming the store location")
+        log("[3/12] Resolving and confirming the store location")
         query = urllib.parse.urlencode({"address": args.address, "category": args.category})
         mapped = client.json("GET", f"/api/map/address-context?{query}")
         context = mapped.get("context")
@@ -427,7 +425,7 @@ def main() -> int:
         summary["location"] = True
         summary["resolvedDistrict"] = location.get("district") or ""
 
-        log("[4/9] Calling deployed StepFun TTS once (audio stays in memory)")
+        log("[4/12] Calling deployed StepFun TTS once (audio stays in memory)")
         tts = client.request(
             "POST",
             "/api/tts",
@@ -443,7 +441,7 @@ def main() -> int:
         summary["tts"] = True
         summary["ttsBytes"] = len(tts.body)
 
-        log("[5/9] Confirming the synthetic facts through the review API")
+        log("[5/12] Confirming the synthetic facts through the review API")
         facts = review_fixture()
         reviewed = client.json(
             "POST",
@@ -459,7 +457,7 @@ def main() -> int:
         summary["confirmedFacts"] = len(facts)
         summary["caseVersion"] = reviewed["version"]
 
-        log("[6/9] Launching and polling the paid 3-plan search")
+        log("[6/12] Launching and polling the paid 2-candidate search")
         deterministic = deterministic_fixture()
         launched = client.json(
             "POST",
@@ -489,7 +487,7 @@ def main() -> int:
         summary["rejected"] = len(result.get("rejected") or [])
         summary["top3"] = len(plans)
 
-        log("[7/9] Verifying same-version analysis reuses the completed run")
+        log("[7/12] Verifying same-version analysis reuses the completed run")
         reused = client.json(
             "POST",
             f"/api/cases/{case_id}/analyze",
@@ -502,7 +500,7 @@ def main() -> int:
         require(reused.get("status") == "completed", "reused run is not completed")
         summary["reused"] = True
 
-        log("[8/9] Starting the highest-ranked plan")
+        log("[8/12] Starting the highest-ranked plan")
         selected = client.json(
             "POST",
             f"/api/cases/{case_id}/plans/{urllib.parse.quote(str(plans[0]['id']), safe='')}/start",
@@ -514,7 +512,62 @@ def main() -> int:
         require(selected.get("selectedPlanId") == plans[0]["id"], "plan start selected the wrong plan")
         summary["planStarted"] = True
 
-        log("[9/9] Deleting the disposable case")
+        log("[9/12] Verifying automatic-publication eligibility and leaderboard visibility")
+        published = client.json(
+            "POST",
+            f"/api/cases/{case_id}/publish",
+            token=token,
+            payload={},
+            expected=(201,),
+        )
+        public_id = str(published.get("publicId") or "")
+        public_manage_token = str(published.get("manageToken") or "")
+        require(public_id.startswith("public_"), "publication returned an invalid public case id")
+        require(public_manage_token.startswith("manage_"), "publication returned no manage token")
+        ranked = client.json("GET", "/api/leaderboard")
+        ranked_cases = ranked.get("cases")
+        require(isinstance(ranked_cases, list), "leaderboard returned no case list")
+        require(any(item.get("id") == public_id for item in ranked_cases), "published case is absent from leaderboard")
+        summary["publishedToLeaderboard"] = True
+
+        log("[10/12] Unpublishing the disposable leaderboard snapshot")
+        unpublished = client.json(
+            "DELETE",
+            f"/api/public-cases/{public_id}",
+            payload={"manageToken": public_manage_token},
+        )
+        require(unpublished.get("unpublished") is True, "public test snapshot was not removed")
+        public_id = ""
+        public_manage_token = ""
+
+        log("[11/12] Verifying a pre-open report is persisted and can be read again")
+        site_created = client.json(
+            "POST", "/api/cases", payload={"stage": "preopen", "category": "我不知道"}, expected=(201,)
+        )
+        site_case_id = str(site_created.get("case", {}).get("id") or "")
+        site_token = str(site_created.get("caseToken") or "")
+        require(site_case_id.startswith("case_") and site_token.startswith("token_"), "pre-open case creation failed")
+        client.json(
+            "POST", f"/api/cases/{site_case_id}/location", token=site_token,
+            payload={"confirmed": True, "context": context},
+        )
+        site_report = client.json(
+            "POST", f"/api/cases/{site_case_id}/analyze", token=site_token,
+            payload={"mode": "site-map", "category": "我不知道"}, expected=(200,),
+        )
+        site_run_id = str(site_report.get("runId") or "")
+        require(site_run_id.startswith("run_") and site_report.get("status") == "complete", "pre-open report did not complete")
+        persisted_site_run = client.json("GET", f"/api/cases/{site_case_id}/runs/{site_run_id}", token=site_token)
+        persisted_result = persisted_site_run.get("result")
+        require(persisted_site_run.get("status") == "completed", "persisted pre-open run is not completed")
+        require(isinstance(persisted_result, dict) and persisted_result.get("reportMode") == "site-map", "pre-open report was not retrievable from storage")
+        require(persisted_result.get("topPlans") == site_report.get("result", {}).get("topPlans"), "retrieved pre-open result differs from stored result")
+        summary["siteReportPersisted"] = True
+
+        log("[12/12] Deleting both disposable private cases")
+        site_deletion = client.json("DELETE", f"/api/cases/{site_case_id}", token=site_token)
+        require(site_deletion.get("deleted") is True, "pre-open disposable case was not deleted")
+        site_deleted = True
         deletion = client.json("DELETE", f"/api/cases/{case_id}", token=token)
         require(deletion.get("deleted") is True, "case deletion was not acknowledged")
         deleted = True
@@ -536,13 +589,26 @@ def main() -> int:
             print(json.dumps(summary, ensure_ascii=False, sort_keys=True))
         else:
             log(
-                "PASS: static page, map location, TTS, fact review, 3 audited "
-                f"plans, {len(plans)} Top plans, run reuse, execution checklist, "
-                "and deletion all passed."
+                "PASS: static page, map location, TTS, fact review, 2 audited "
+                f"candidates, {len(plans)} Top plans, run reuse, execution checklist, "
+                "anonymous leaderboard publication, pre-open persistence/readback, and deletion all passed."
             )
             log(json.dumps(summary, ensure_ascii=False, indent=2, sort_keys=True))
         return 0
     finally:
+        if public_id and public_manage_token:
+            try:
+                client.json("DELETE", f"/api/public-cases/{public_id}", payload={"manageToken": public_manage_token})
+                log("Cleanup: disposable public snapshot removed after an incomplete run.")
+            except Exception as cleanup_error:  # noqa: BLE001 - cleanup must not hide the root failure
+                log(f"WARNING: public snapshot cleanup failed: {cleanup_error}")
+        if site_case_id and site_token and not site_deleted:
+            try:
+                cleanup = client.json("DELETE", f"/api/cases/{site_case_id}", token=site_token)
+                log("Cleanup: disposable pre-open case deleted after an incomplete run.")
+                site_deleted = cleanup.get("deleted") is True
+            except Exception as cleanup_error:  # noqa: BLE001 - cleanup must not hide the root failure
+                log(f"WARNING: pre-open case cleanup failed: {cleanup_error}")
         if case_id and token and not deleted:
             try:
                 cleanup = client.json("DELETE", f"/api/cases/{case_id}", token=token)

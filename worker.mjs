@@ -1405,16 +1405,16 @@ function siteGeoSummary(record) {
 
 function siteMetricsFromGeo(geo) {
   const metrics = [
-    { label: "800米同类竞品", value: `${geo.competitorCount} 个`, hint: "地图口径，不代表真实客流" }
+    { label: "800米同类竞品", value: `${geo.competitorCount} 个` }
   ];
   const crowd = geo.environment
     .filter((group) => group.count > 0)
     .sort((a, b) => b.count - a.count)
     .slice(0, 2);
   crowd.forEach((group) => {
-    metrics.push({ label: group.label, value: `${group.count} 处`, hint: group.samples[0] || "周边环境信号" });
+    metrics.push({ label: group.label, value: `${group.count} 处` });
   });
-  while (metrics.length < 3) metrics.push({ label: "客群信号", value: "需现场核", hint: "地图未覆盖部分需到店确认" });
+  while (metrics.length < 3) metrics.push({ label: "客群信号", value: "需现场核" });
   return metrics.slice(0, 3);
 }
 
@@ -2586,7 +2586,9 @@ async function publishCase(request, env, caseId) {
     plans: plans.map((plan, index) => ({
       role: index === 0 ? "主方案" : "备选方案",
       bottleneck: trimText(plan.bottleneck, 80),
-      title: trimText(plan.title, 120),
+      // Older Agent candidates did not always carry a display title. Never
+      // publish a blank card title: fall back to its concrete action.
+      title: trimText(plan.title || plan.action || plan.bottleneck || "待验证方案", 120),
       action: trimText(plan.action, 300),
       budgetCap: Number(plan.budget_cap ?? plan.budgetCap) || 0,
       durationDays: Number(plan.duration_days ?? plan.durationDays) || 0,
@@ -2601,7 +2603,7 @@ async function publishCase(request, env, caseId) {
   publicCaseStore.set(id, row);
   if (env.DB) await env.DB.prepare(`INSERT INTO public_cases (id, source_case_id, manage_token_hash, snapshot_json, data_score, outcome_score, rank_score, is_active, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?)`)
     .bind(row.id, row.sourceCaseId, row.manageTokenHash, JSON.stringify(row.snapshot), row.dataScore, row.outcomeScore, row.rankScore, timestamp, timestamp).run();
-  return apiJson(request, env, { publicId: id, manageToken, rankScore: row.rankScore, snapshot });
+  return apiJson(request, env, { publicId: id, manageToken, rankScore: row.rankScore, snapshot }, 201);
 }
 
 async function updatePublicOutcome(request, env, publicId) {
@@ -2669,9 +2671,14 @@ async function routeCases(request, env, ctx, url) {
   }
   if (request.method === "DELETE" && parts.length === 3) {
     const record = await requireCase(request, env, caseId);
-    if (record.latestRunId) runStore.delete(record.latestRunId);
+    for (const [runId, run] of runStore.entries()) {
+      if (run?.caseId === caseId) runStore.delete(runId);
+    }
     caseStore.delete(caseId);
     if (env.DB) {
+      // `analysis_runs` is private case data too. Delete it before the case so
+      // a 24-hour case cleanup cannot leave orphaned reports in D1.
+      await env.DB.prepare("DELETE FROM analysis_runs WHERE case_id = ?").bind(caseId).run();
       await env.DB.prepare("DELETE FROM cases WHERE id = ?").bind(caseId).run();
     }
     return apiJson(request, env, { deleted: true });
