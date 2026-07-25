@@ -24,6 +24,10 @@ def main() -> None:
 
     for filename in PUBLIC_FILES:
         shutil.copy2(ROOT / filename, DIST / filename)
+    # Cloudflare Static Assets gives `ranking.html` its own canonical redirect.
+    # Publish an extensionless copy as the real `/ranking` resource so public
+    # links never bounce between the HTML and slash variants.
+    shutil.copy2(ROOT / "ranking.html", DIST / "ranking")
     for filename in PUBLIC_DATA:
         shutil.copy2(ROOT / "data" / filename, DIST / "data" / filename)
 

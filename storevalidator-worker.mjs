@@ -37,10 +37,6 @@ export default {
       if (share) {
         return Response.redirect(new URL(`/case/${share[1]}/`, url).toString(), 308);
       }
-      if (url.pathname === "/ranking") {
-        const rankingUrl = new URL("/ranking.html", url);
-        return env.ASSETS.fetch(new Request(rankingUrl.toString(), request));
-      }
     }
     return env.ASSETS.fetch(request);
   }
