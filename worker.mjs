@@ -41,12 +41,9 @@ const MAX_ASR_SESSION_MS = 20 * 60 * 1000;
 const MAX_ASR_AUDIO_BYTES = 40 * 1024 * 1024;
 const MAX_ASR_CLIP_BYTES = 3 * 1024 * 1024;
 export const ASR_SILENCE_DURATION_MS = 350;
-const DAILY_WINDOW_MS = 26 * 60 * 60 * 1000;
 const SEARCH_TARGET = 2;
 const SEARCH_ROUNDS = 1;
 const SEARCH_CONCURRENCY = 1;
-const DEFAULT_DAILY_ANALYSIS_BUDGET = 25;
-const DEFAULT_DAILY_IP_ANALYSIS_BUDGET = 5;
 const ACTION_RATE_LIMITS = {
   "create-case": { limit: 12, windowMs: 10 * 60 * 1000 },
   map: { limit: 60, windowMs: 60 * 1000 },
@@ -862,59 +859,6 @@ async function actionRateAllowed(request, env, action) {
     limit: policy.limit,
     windowMs: policy.windowMs
   })).allowed);
-}
-
-function shanghaiDayKey(date = new Date()) {
-  return new Intl.DateTimeFormat("en-CA", {
-    timeZone: "Asia/Shanghai",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit"
-  }).format(date);
-}
-
-export async function consumeDailyAnalysisBudget(request, env) {
-  const day = shanghaiDayKey();
-  const ip = clientIp(request) || "unknown";
-  const configuredIpLimit = Number(env.ANALYSIS_DAILY_IP_BUDGET);
-  const ipLimit = Number.isFinite(configuredIpLimit)
-    ? Math.max(1, Math.min(Math.floor(configuredIpLimit), 50))
-    : DEFAULT_DAILY_IP_ANALYSIS_BUDGET;
-  const ipKey = await tokenHash(`analysis-ip:${ip}:${day}`);
-  const ipResult = await persistentRateCheck(env, {
-    action: "analysis-daily-ip",
-    key: ipKey,
-    limit: ipLimit,
-    windowMs: DAILY_WINDOW_MS
-  });
-  if (!ipResult.allowed) {
-    return {
-      allowed: false,
-      reason: "ip",
-      retryAfterMs: ipResult.retryAfterMs || DAILY_WINDOW_MS,
-      ipLimit
-    };
-  }
-  const configuredLimit = Number(env.ANALYSIS_DAILY_BUDGET);
-  const globalLimit = Number.isFinite(configuredLimit)
-    ? Math.max(1, Math.min(Math.floor(configuredLimit), 500))
-    : DEFAULT_DAILY_ANALYSIS_BUDGET;
-  const globalKey = await tokenHash(`analysis-global:${day}`);
-  const globalResult = await persistentRateCheck(env, {
-    action: "analysis-daily-global",
-    key: globalKey,
-    limit: globalLimit,
-    windowMs: DAILY_WINDOW_MS
-  });
-  if (!globalResult.allowed) {
-    return {
-      allowed: false,
-      reason: "global",
-      retryAfterMs: globalResult.retryAfterMs || DAILY_WINDOW_MS,
-      globalLimit
-    };
-  }
-  return { allowed: true, globalLimit, ipLimit };
 }
 
 async function readJson(request) {

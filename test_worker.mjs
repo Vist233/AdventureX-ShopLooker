@@ -3,7 +3,6 @@ import worker, {
   AgentGate,
   asrSessionConfig,
   claimAnalysisRound,
-  consumeDailyAnalysisBudget,
   enqueueAnalysisRound,
   handleQueueMessageFailure,
   normalizeAsrClientEvent,
@@ -871,29 +870,6 @@ try {
   assert.equal(persistedAsr.sessions, 3);
   assert.ok(persistedAsr.reservedBytes >= 3 * 40 * 1024 * 1024);
   assert.ok(persistedAsr.reservedDurationMs >= 3 * 20 * 60 * 1000);
-
-  const dailyEnv = {
-    ANALYSIS_DAILY_BUDGET: "2",
-    ANALYSIS_DAILY_IP_BUDGET: "1",
-    AGENT_GATE: {
-      idFromName: () => ({ name: "global" }),
-      get: () => ({
-        fetch: (input, init) => durableGate.fetch(new Request(input, init))
-      })
-    }
-  };
-  const dailyRequest = (ip) => new Request("https://example.com/api/cases/c/analyze", {
-    method: "POST",
-    headers: { "CF-Connecting-IP": ip }
-  });
-  assert.equal((await consumeDailyAnalysisBudget(dailyRequest("198.51.100.1"), dailyEnv)).allowed, true);
-  const sameIpDaily = await consumeDailyAnalysisBudget(dailyRequest("198.51.100.1"), dailyEnv);
-  assert.equal(sameIpDaily.allowed, false);
-  assert.equal(sameIpDaily.reason, "ip");
-  assert.equal((await consumeDailyAnalysisBudget(dailyRequest("198.51.100.2"), dailyEnv)).allowed, true);
-  const globalDaily = await consumeDailyAnalysisBudget(dailyRequest("198.51.100.3"), dailyEnv);
-  assert.equal(globalDaily.allowed, false);
-  assert.equal(globalDaily.reason, "global");
 
   env.AGENT_GATE = {
     idFromName: () => ({ name: "global" }),
