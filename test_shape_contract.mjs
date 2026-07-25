@@ -8,6 +8,8 @@ const index = readFileSync(new URL("./index.html", import.meta.url), "utf8");
 // checks the frame grammar instead of freezing unrelated product copy.
 for (const selector of [
   ".topbar-ranking",
+  ".ranking-button",
+  ".analysis-media",
   ".barcode",
   ".method-lanes",
   ".flow-card",
@@ -24,5 +26,7 @@ assert.ok(index.includes('class="barcode-wrap"'), "landing receipt must conclude
 assert.ok(index.includes('class="method-lanes"'), "landing must retain the four-step receipt grid");
 assert.ok(index.includes('id="mapPicker"'), "functional map picker must survive the visual migration");
 assert.ok(index.includes('id="preopenRecommendation"'), "functional pre-open report must survive the visual migration");
+assert.ok(index.includes('src="loading.mp4"'), "the signature analysis animation must survive the visual migration");
+assert.ok(index.includes('data-testid="hero-ranking"'), "the public case archive entry must remain available from the landing page");
 
-console.log("shape contract: thermal receipt frame, barcode, grid, and current functional surfaces passed");
+console.log("shape contract: thermal receipt frame, signature animation, barcode, grid, and current functional surfaces passed");

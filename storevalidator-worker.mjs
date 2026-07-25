@@ -23,6 +23,25 @@ export default {
       headers.set("Origin", new URL(backendOrigin).origin);
       return fetch(new Request(upstreamRequest, { headers }));
     }
+    // Keep public links stable and shareable.  The application is still a
+    // static SPA, but these are real, canonical resources rather than hash
+    // fragments that disappear when somebody opens a copied link elsewhere.
+    if (request.method === "GET" || request.method === "HEAD") {
+      if (url.pathname === "/ranking" || url.pathname === "/ranking.html") {
+        return Response.redirect(new URL("/ranking/", url).toString(), 308);
+      }
+      if (url.pathname === "/demo") {
+        return Response.redirect(new URL("/demo/", url).toString(), 308);
+      }
+      const share = url.pathname.match(/^\/case\/([A-Za-z0-9_-]+)$/);
+      if (share) {
+        return Response.redirect(new URL(`/case/${share[1]}/`, url).toString(), 308);
+      }
+      if (url.pathname === "/ranking/") {
+        const rankingUrl = new URL("/ranking.html", url);
+        return env.ASSETS.fetch(new Request(rankingUrl.toString(), request));
+      }
+    }
     return env.ASSETS.fetch(request);
   }
 };

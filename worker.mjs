@@ -2690,10 +2690,50 @@ async function readPublicCases(env) {
   }));
 }
 
+async function readPublicCase(env, publicId) {
+  if (!publicId) return null;
+  if (!env.DB) {
+    const row = publicCaseStore.get(publicId);
+    return row?.isActive ? row : null;
+  }
+  const row = await env.DB.prepare("SELECT * FROM public_cases WHERE id = ? AND is_active = 1")
+    .bind(publicId).first();
+  if (!row) return null;
+  return {
+    id: row.id,
+    snapshot: JSON.parse(row.snapshot_json || "{}"),
+    dataScore: Number(row.data_score),
+    outcomeScore: Number(row.outcome_score),
+    rankScore: Number(row.rank_score),
+    isActive: Boolean(row.is_active),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at
+  };
+}
+
 async function leaderboard(request, env) {
   const rows = await readPublicCases(env);
   return apiJson(request, env, {
     cases: rows.map((row, index) => ({ rank: index + 1, id: row.id, ...row.snapshot, dataScore: row.dataScore, outcomeScore: row.outcomeScore, rankScore: row.rankScore, updatedAt: row.updatedAt }))
+  });
+}
+
+async function publicCaseDetail(request, env, publicId) {
+  const row = await readPublicCase(env, publicId);
+  if (!row) {
+    return apiJson(request, env, { code: "PUBLIC_CASE_NOT_FOUND", message: "该匿名案例不存在，或已被下架" }, 404);
+  }
+  // This is deliberately the same anonymised snapshot used by the leaderboard.
+  // Never return source_case_id, token hashes, audio, raw transcripts or raw
+  // financial facts from a share URL.
+  return apiJson(request, env, {
+    id: row.id,
+    ...row.snapshot,
+    dataScore: row.dataScore,
+    outcomeScore: row.outcomeScore,
+    rankScore: row.rankScore,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt
   });
 }
 
@@ -2952,6 +2992,7 @@ export default {
       return leaderboard(request, env);
     }
     const publicMatch = url.pathname.match(/^\/api\/public-cases\/([^/]+)$/);
+    if (publicMatch && request.method === "GET") return publicCaseDetail(request, env, cleanId(publicMatch[1], 100));
     if (publicMatch && request.method === "POST") return updatePublicOutcome(request, env, cleanId(publicMatch[1], 100));
     if (publicMatch && request.method === "DELETE") return unpublishCase(request, env, cleanId(publicMatch[1], 100));
     if (url.pathname.startsWith("/api/cases")) {

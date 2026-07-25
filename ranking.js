@@ -44,7 +44,10 @@ function renderCards(cases) {
     </article>`;
   }).join("");
   list.querySelectorAll(".rank-card").forEach((card) => {
-    const open = () => openDetail(Number(card.dataset.index));
+    const open = () => {
+      const item = currentCases[Number(card.dataset.index)];
+      if (item?.id) window.location.assign(`/case/${encodeURIComponent(item.id)}/`);
+    };
     card.addEventListener("click", open);
     card.addEventListener("keydown", (event) => {
       if (event.key === "Enter" || event.key === " ") { event.preventDefault(); open(); }

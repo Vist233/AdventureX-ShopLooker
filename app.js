@@ -8,7 +8,10 @@ const LOCAL_VAD_SILENCE_MS = 350;
 const LOCAL_VAD_PRE_ROLL_MS = 280;
 const LOCAL_VAD_MAX_SEGMENT_MS = 20_000;
 const DEMO_ORIGIN = "https://storevalidator.zhangyvjing.com/demo";
-const DEMO_MODE = window.location.pathname === "/demo"
+const PUBLIC_CASE_MATCH = window.location.pathname.match(/^\/case\/([A-Za-z0-9_-]+)\/?$/);
+const PUBLIC_CASE_ID = PUBLIC_CASE_MATCH?.[1] || null;
+const PUBLIC_CASE_MODE = Boolean(PUBLIC_CASE_ID);
+const DEMO_MODE = ["/demo", "/demo/"].includes(window.location.pathname)
   || ["demo.shopvalidator.zhangyvjing.com"].includes(window.location.hostname)
   || new URLSearchParams(window.location.search).get("demo") === "1";
 const DEMO_TURN_MS = Math.max(40, Number(new URLSearchParams(window.location.search).get("demoSpeed")) || 4000);
@@ -16,7 +19,7 @@ const DEMO_CHAR_MS = DEMO_TURN_MS < 100 ? 0 : 16;
 
 const state = {
   panel: "location",
-  productView: DEMO_MODE ? "workspace" : "landing",
+  productView: PUBLIC_CASE_MODE ? "result" : (DEMO_MODE ? "workspace" : "landing"),
   stage: null,
   caseId: null,
   caseToken: null,
@@ -65,7 +68,8 @@ const state = {
   analysisTimer: null,
   analysisFloor: 0,
   demoMode: DEMO_MODE,
-  demoPlaybackToken: 0
+  demoPlaybackToken: 0,
+  publicShare: null
 };
 
 const QUESTION_BANK = {
@@ -2676,30 +2680,143 @@ function renderAnalysisResult(data) {
 async function publishAnonymousCaseIfEligible() {
   if (state.localMode || !state.caseId || !state.caseToken) return;
   const key = `shoplooker-public:${state.caseId}`;
-  if (localStorage.getItem(key)) return;
+  const savedRaw = localStorage.getItem(key);
+  if (savedRaw) {
+    try {
+      const saved = JSON.parse(savedRaw);
+      if (saved.publicId) {
+        let snapshot = saved.snapshot;
+        if (!snapshot) {
+          const current = await fetchJson(`/api/public-cases/${encodeURIComponent(saved.publicId)}`, {}, 8000);
+          snapshot = current;
+          localStorage.setItem(key, JSON.stringify({ ...saved, snapshot }));
+        }
+        state.publicShare = { publicId: saved.publicId, manageToken: saved.manageToken, snapshot };
+        attachPublicShareActions(key);
+        return;
+      }
+    } catch (_) {
+      localStorage.removeItem(key);
+    }
+  }
   try {
     const data = await fetchJson(`/api/cases/${encodeURIComponent(state.caseId)}/publish`, {
       method: "POST", headers: caseHeaders({ "Content-Type": "application/json" }), body: "{}"
     }, 10000);
     if (data.publicId && data.manageToken) {
-      localStorage.setItem(key, JSON.stringify({ publicId: data.publicId, manageToken: data.manageToken }));
+      state.publicShare = { publicId: data.publicId, manageToken: data.manageToken, snapshot: data.snapshot || {} };
+      localStorage.setItem(key, JSON.stringify(state.publicShare));
       $("candidateCount").textContent = `${$("candidateCount").textContent} · 已匿名发布`;
-      const button = document.createElement("button");
-      button.type = "button"; button.className = "secondary-button"; button.textContent = "下架匿名案例";
-      button.addEventListener("click", async () => {
-        const saved = JSON.parse(localStorage.getItem(key) || "{}");
-        if (!saved.publicId || !saved.manageToken) return;
-        await fetchJson(`/api/public-cases/${encodeURIComponent(saved.publicId)}`, {
-          method: "DELETE", headers: { "X-Public-Manage-Token": saved.manageToken }
-        }, 8000);
-        localStorage.removeItem(key); button.remove();
-        $("candidateCount").textContent = $("candidateCount").textContent.replace(" · 已匿名发布", "");
-      });
-      $("result").querySelector(".result-actions")?.append(button);
+      attachPublicShareActions(key);
     }
   } catch (_) {
     // Publishing is optional and never blocks the private result.
   }
+}
+
+function publicCaseUrl(publicId) {
+  return `${window.location.origin}/case/${encodeURIComponent(publicId)}/`;
+}
+
+function attachPublicShareActions(storageKey) {
+  const actions = $("result")?.querySelector(".result-actions");
+  if (!actions || !state.publicShare?.publicId) return;
+  actions.querySelector("[data-public-share]")?.remove();
+  actions.querySelector("[data-public-unpublish]")?.remove();
+
+  const shareButton = document.createElement("button");
+  shareButton.type = "button";
+  shareButton.className = "secondary-button";
+  shareButton.dataset.publicShare = "true";
+  shareButton.textContent = "打印 / 分享判断票";
+  shareButton.addEventListener("click", openShareReceipt);
+
+  const unpublishButton = document.createElement("button");
+  unpublishButton.type = "button";
+  unpublishButton.className = "secondary-button";
+  unpublishButton.dataset.publicUnpublish = "true";
+  unpublishButton.textContent = "下架匿名案例";
+  unpublishButton.addEventListener("click", async () => {
+    const saved = state.publicShare;
+    if (!saved?.publicId || !saved.manageToken) return;
+    unpublishButton.disabled = true;
+    try {
+      await fetchJson(`/api/public-cases/${encodeURIComponent(saved.publicId)}`, {
+        method: "DELETE", headers: { "X-Public-Manage-Token": saved.manageToken }
+      }, 8000);
+      localStorage.removeItem(storageKey);
+      state.publicShare = null;
+      shareButton.remove();
+      unpublishButton.remove();
+      $("candidateCount").textContent = $("candidateCount").textContent.replace(" · 已匿名发布", "");
+    } catch (error) {
+      unpublishButton.disabled = false;
+      unpublishButton.textContent = error.message || "下架失败，请重试";
+    }
+  });
+  actions.append(shareButton, unpublishButton);
+}
+
+function qrImageUrl(shareUrl) {
+  // The QR service receives only the already-public random case URL. No
+  // address, token, audio, transcript or financial record is encoded here.
+  return `https://api.qrserver.com/v1/create-qr-code/?format=svg&margin=0&size=240x240&data=${encodeURIComponent(shareUrl)}`;
+}
+
+function shareSnapshotReceipt(snapshot, publicId) {
+  const shareUrl = publicCaseUrl(publicId);
+  const plans = Array.isArray(snapshot?.plans) ? snapshot.plans.slice(0, 2) : [];
+  const signals = Array.isArray(snapshot?.signals) ? snapshot.signals.slice(0, 4) : [];
+  return `
+    <article class="share-receipt" data-share-url="${escapeHtml(shareUrl)}">
+      <div class="share-receipt-meta"><span>店判 · ANONYMOUS CASE</span><span>${escapeHtml(publicId.slice(-10).toUpperCase())}</span></div>
+      <div class="share-receipt-decision">
+        <span>${escapeHtml(lbConclusion(snapshot))}</span>
+        <h2>${escapeHtml(snapshot?.decisionTitle || lbConclusion(snapshot))}</h2>
+        <p>${escapeHtml(snapshot?.decisionReason || snapshot?.statusLine || "已完成经营判断")}</p>
+      </div>
+      <div class="share-receipt-section">
+        <b>匿名公开范围</b>
+        <p>仅含脱敏后的经营信号与已核验方案；不含地址、录音、原始问诊和完整账目。</p>
+      </div>
+      ${signals.length ? `<div class="share-receipt-signals">${signals.map((signal) => `<div><span>${escapeHtml(signal.label)}</span><b>${escapeHtml(signal.value)}</b></div>`).join("")}</div>` : ""}
+      ${plans.length ? `<div class="share-receipt-plans">${plans.map((plan, index) => `<div><span>${index === 0 ? "主方案" : "备选方案"} · ${escapeHtml(plan.bottleneck || "")}</span><b>${escapeHtml(plan.title)}</b><p>${escapeHtml(plan.action || "")}</p></div>`).join("")}</div>` : ""}
+      <a class="share-receipt-qr" href="${escapeHtml(shareUrl)}" target="_blank" rel="noopener noreferrer" aria-label="打开匿名经营判断记录">
+        <img src="${escapeHtml(qrImageUrl(shareUrl))}" alt="打开匿名经营判断记录的二维码">
+        <span>扫码或点击查看匿名判断记录</span>
+      </a>
+      <a class="share-receipt-link" href="${escapeHtml(shareUrl)}" target="_blank" rel="noopener noreferrer">${escapeHtml(shareUrl)}</a>
+    </article>`;
+}
+
+function openShareReceipt() {
+  const share = state.publicShare;
+  const dialog = $("shareReceiptDialog");
+  const body = $("shareReceiptBody");
+  if (!share?.publicId || !dialog || !body) return;
+  body.innerHTML = shareSnapshotReceipt(share.snapshot || {}, share.publicId);
+  if (typeof dialog.showModal === "function") dialog.showModal();
+  else dialog.setAttribute("open", "");
+}
+
+async function copyShareReceiptLink() {
+  const share = state.publicShare;
+  const button = $("copyShareLink");
+  if (!share?.publicId || !button) return;
+  const url = publicCaseUrl(share.publicId);
+  try {
+    await navigator.clipboard.writeText(url);
+    button.textContent = "链接已复制";
+  } catch (_) {
+    window.prompt("复制这条匿名分享链接：", url);
+  }
+  window.setTimeout(() => { button.textContent = "复制链接"; }, 1800);
+}
+
+async function printShareReceipt() {
+  const qr = $("shareReceiptBody")?.querySelector("img");
+  try { await qr?.decode?.(); } catch (_) { /* The visible URL remains usable if QR loading is slow. */ }
+  window.print();
 }
 
 const LB_DECISION_CLASS = { GO: "go", TEST: "test", STOP: "stop", EXIT: "exit", EVIDENCE: "test" };
@@ -2753,6 +2870,54 @@ function lbPlansMarkup(plans) {
 function lbRejectedMarkup(reasons) {
   if (!Array.isArray(reasons) || !reasons.length) return "";
   return `<details class="rejected"><summary>为什么其他方案被淘汰</summary><div>${reasons.map((reason) => `<p>· ${escapeHtml(reason)}</p>`).join("")}</div></details>`;
+}
+
+function publicCaseTimestamp(value) {
+  if (!value) return "公开案例";
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? "公开案例" : `${date.getFullYear()}.${String(date.getMonth() + 1).padStart(2, "0")}.${String(date.getDate()).padStart(2, "0")}`;
+}
+
+function renderPublicSharedCase(item) {
+  const result = $("result");
+  if (!result) return;
+  const conclusion = lbConclusion(item);
+  result.classList.add("public-case-result");
+  result.hidden = false;
+  result.innerHTML = `
+    <div class="public-case-heading">
+      <span class="section-kicker">匿名经营判断记录 · ${escapeHtml(publicCaseTimestamp(item.updatedAt || item.createdAt))}</span>
+      <p>这是经公开门槛筛选后的脱敏快照；原始地址、录音、问诊文本、完整账目和案卷令牌均不会出现在这里。</p>
+    </div>
+    <div class="result-main">
+      <div><span>${escapeHtml(conclusion)}</span><small>${escapeHtml(item.category || "餐饮")} · 匿名案例</small></div>
+      <h2>${escapeHtml(item.decisionTitle || conclusion)}</h2>
+      <p>${escapeHtml(item.decisionReason || item.statusLine || "这份记录只保留可公开的经营判断。")}</p>
+    </div>
+    <div class="public-case-score"><span>事实完整度</span><b>${Number.isFinite(Number(item.evidenceScore ?? item.dataScore)) ? `${Math.round(Number(item.evidenceScore ?? item.dataScore))}%` : "已核验"}</b><span>公开方案已通过核验</span></div>
+    ${lbNarrativeMarkup(item.narrative)}
+    ${lbSignalsMarkup(item.signals)}
+    ${lbPlansMarkup(item.plans)}
+    ${lbRejectedMarkup(item.rejectedReasons)}
+    <div class="result-actions public-case-actions">
+      <a class="secondary-button" href="/ranking/">查看匿名案例榜</a>
+      <a class="primary-button" href="/">判断自己的店</a>
+    </div>`;
+}
+
+async function loadPublicSharedCase(publicId) {
+  setProductView("result");
+  setPanel("result");
+  $("analysisProgress").hidden = true;
+  try {
+    const item = await fetchJson(`/api/public-cases/${encodeURIComponent(publicId)}`, {}, 10000);
+    renderPublicSharedCase(item);
+  } catch (error) {
+    const result = $("result");
+    result.hidden = false;
+    result.classList.add("public-case-result");
+    result.innerHTML = `<div class="public-case-missing"><span class="section-kicker">匿名案例不可用</span><h2>这张判断票已失效，或已被下架。</h2><p>${escapeHtml(error.message || "请回到案例榜查看仍公开的记录。")}</p><div class="result-actions"><a class="primary-button" href="/ranking/">返回匿名案例榜</a></div></div>`;
+  }
 }
 
 function closeResultCaseDetail() {
@@ -2812,7 +2977,10 @@ function renderResultLeaderboardCards(cases) {
     </article>`;
   }).join("");
   listEl.querySelectorAll(".rank-card").forEach((card) => {
-    const open = () => openResultCaseDetail(Number(card.dataset.index));
+    const open = () => {
+      const item = resultLeaderboardCases[Number(card.dataset.index)];
+      if (item?.id) window.location.assign(`/case/${encodeURIComponent(item.id)}/`);
+    };
     card.addEventListener("click", open);
     card.addEventListener("keydown", (event) => {
       if (event.key === "Enter" || event.key === " ") { event.preventDefault(); open(); }
@@ -2979,6 +3147,12 @@ $("closeCaseDetail")?.addEventListener("click", closeResultCaseDetail);
 $("caseDetailDialog")?.addEventListener("click", (event) => {
   if (event.target === $("caseDetailDialog")) closeResultCaseDetail();
 });
+$("closeShareReceipt")?.addEventListener("click", () => $("shareReceiptDialog")?.close());
+$("shareReceiptDialog")?.addEventListener("click", (event) => {
+  if (event.target === $("shareReceiptDialog")) $("shareReceiptDialog").close();
+});
+$("copyShareLink")?.addEventListener("click", () => void copyShareReceiptLink());
+$("printShareReceipt")?.addEventListener("click", () => void printShareReceipt());
 document.querySelector("[data-testid=hero-start]").addEventListener("click", (event) => {
   event.preventDefault();
   if (DEMO_MODE) {
@@ -2994,7 +3168,9 @@ document.querySelector(".brand").addEventListener("click", (event) => {
 });
 
 configureDemoLanding();
-if (!DEMO_MODE) {
+if (PUBLIC_CASE_MODE) {
+  void loadPublicSharedCase(PUBLIC_CASE_ID);
+} else if (!DEMO_MODE) {
   setProductView("landing");
   applyDefaultJudgeSetup();
 }

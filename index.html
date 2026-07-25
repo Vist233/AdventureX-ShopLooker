@@ -14,8 +14,8 @@
       <img class="brand-logo" src="icon.jpeg" alt="">
       <span>勇哥判店</span>
     </a>
-    <a class="topbar-ranking" href="/ranking.html">店铺排行榜</a>
-    <span class="topbar-stat" hidden>整理 <b id="headerTitles">623</b> 个公开餐饮案例，筛选 <b id="headerTranscripts">156</b> 份高可信案例提取判断维度</span>
+    <span class="topbar-stat">已归档 <b id="headerTitles">623</b> 例 · 高可信 <b id="headerTranscripts">156</b> 例</span>
+    <a class="topbar-ranking" href="/ranking.html">公开案例账单</a>
   </header>
 
   <main id="top">
@@ -28,6 +28,7 @@
         <div class="hero-actions">
           <a class="primary-button" href="#judge" data-testid="hero-start">开始店铺问诊</a>
           <a class="demo-button" href="/demo" data-testid="hero-demo">查看诊断示例 <span>→</span></a>
+          <a class="ranking-button" href="/ranking.html" data-testid="hero-ranking"><span>已核验的匿名经营案例</span><b>查看公开案例账单 →</b></a>
         </div>
       </div>
       <aside class="market-signal" aria-label="餐饮行业风险信号">
@@ -269,8 +270,11 @@
 
         <section class="flow-card flow-panel analysis-panel" id="analysisPanel" data-panel="result" hidden data-testid="analysis-step">
           <div id="analysisProgress" data-testid="analysis-progress">
-            <span class="brand-mark analysis-mark" aria-hidden="true">判</span>
-            <b id="analysisPercent" hidden>0%</b>
+            <div class="analysis-media" aria-hidden="true">
+              <video class="analysis-loading" src="loading.mp4" autoplay loop muted playsinline></video>
+              <span class="brand-mark analysis-mark">判</span>
+            </div>
+            <b id="analysisPercent">0%</b>
             <span class="section-kicker">正在后台分析</span>
             <h3 id="analysisTitle">先按勇哥框架算账</h3>
             <p id="analysisStatus">正在检查单位经济、现金寿命和第一断点…</p>
@@ -330,7 +334,7 @@
               <p>下面是已核验的匿名案例。点开任意一张，就是这家店完整的分析结果页——含判断依据、下一步方案与被淘汰的理由。</p>
             </div>
             <div class="ranking-list" id="resultRankingList" aria-live="polite"><p>正在载入案例…</p></div>
-            <a class="result-leaderboard-more" href="/ranking.html">查看完整排行榜 →</a>
+            <a class="result-leaderboard-more" href="/ranking/">查看完整排行榜 →</a>
           </section>
         </section>
       </div>
@@ -362,9 +366,20 @@
     <div class="case-detail-bar"><span class="section-kicker" id="caseDetailKicker">案例分析结果</span><button class="dialog-close" id="closeCaseDetail" type="button" aria-label="关闭案例详情">×</button></div>
     <div class="case-detail-body" id="caseDetailBody"></div>
   </dialog>
+  <dialog class="share-receipt-dialog" id="shareReceiptDialog" aria-labelledby="shareReceiptTitle">
+    <div class="case-detail-bar share-receipt-bar">
+      <span class="section-kicker" id="shareReceiptTitle">匿名经营判断票</span>
+      <button class="dialog-close" id="closeShareReceipt" type="button" aria-label="关闭分享票">×</button>
+    </div>
+    <div class="share-receipt-body" id="shareReceiptBody"></div>
+    <div class="share-receipt-controls">
+      <button class="secondary-button" id="copyShareLink" type="button">复制链接</button>
+      <button class="primary-button" id="printShareReceipt" type="button">打印这张票</button>
+    </div>
+  </dialog>
 
   <script src="fact-store.js"></script>
   <script src="decision-engine.js"></script>
-  <script src="app.js?v=thermal-receipt-1"></script>
+  <script src="app.js?v=thermal-receipt-2"></script>
 </body>
 </html>
