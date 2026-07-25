@@ -149,6 +149,22 @@
             <span class="status-dot"></span><p></p>
           </div>
 
+          <section class="map-picker" id="mapPicker" hidden data-testid="map-picker" aria-label="地图选点">
+            <div class="map-picker-heading">
+              <div><small>确认到店铺门口</small><b>点击地图，微调图钉位置</b></div>
+              <button id="mapPickerRelocate" type="button" class="map-picker-relocate">回到我的位置</button>
+            </div>
+            <div class="map-picker-canvas" id="mapPickerCanvas" role="button" tabindex="0" aria-label="点击地图选择店铺位置" data-testid="map-picker-canvas">
+              <img id="mapPickerImage" alt="店铺周边地图">
+              <span class="map-picker-pin" id="mapPickerPin" aria-hidden="true">●</span>
+              <span class="map-picker-center" aria-hidden="true"></span>
+            </div>
+            <div class="map-picker-actions">
+              <span id="mapPickerCoordinate">已定位到地图中心</span>
+              <button id="useMapPickerPoint" class="secondary-button" type="button" disabled data-testid="use-map-point">使用图钉位置</button>
+            </div>
+          </section>
+
           <div class="map-summary" id="mapSummary" hidden data-testid="map-summary">
             <div>
               <small>地图找到的位置</small>

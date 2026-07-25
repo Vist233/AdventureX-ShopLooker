@@ -353,6 +353,10 @@ async function buildContextFromGcj02(lat, lng, category, key, options = {}) {
       mode: options.mode || "gps",
       coordinateSystem: "GCJ-02",
       location: {
+        // The browser uses these only for the temporary map picker. The
+        // frontend strips them before it persists the private case snapshot.
+        latitude: Number(lat.toFixed(6)),
+        longitude: Number(lng.toFixed(6)),
         address: cleanText(reverseResult.address, 100) || cleanText(options.fallbackAddress, 100),
         province: cleanText(addressComponent.province, 20),
         city: cleanText(addressComponent.city, 20),
@@ -454,6 +458,68 @@ export async function getAddressContext(url, env) {
     return json({
       code: "ADDRESS_LOOKUP_ERROR",
       message: error instanceof Error ? error.message : "地址解析暂时不可用"
+    }, 502);
+  }
+}
+
+// A point selected on the Tencent static map is already GCJ-02. Keeping this
+// separate from browser GPS avoids applying the WGS84→GCJ02 conversion twice.
+export async function getPickedMapContext(url, env) {
+  if (!configured(env)) return mapNotConfigured();
+  const lat = Number(url.searchParams.get("lat"));
+  const lng = Number(url.searchParams.get("lng"));
+  if (!validCoordinate(lat, lng)) {
+    return json({ code: "INVALID_LOCATION", message: "地图选点坐标无效" }, 400);
+  }
+  const category = cleanText(url.searchParams.get("category"), 24) || "餐饮";
+  try {
+    return json(await buildContextFromGcj02(lat, lng, category, env.TENCENT_MAP_KEY, {
+      mode: "map-picker",
+      rich: url.searchParams.get("rich") === "1"
+    }));
+  } catch (error) {
+    return json({
+      code: "MAP_UPSTREAM_ERROR",
+      message: error instanceof Error ? error.message : "腾讯地图暂时不可用"
+    }, 502);
+  }
+}
+
+// Static map image is proxied through the Worker: the server-only WebService
+// key stays private, while the browser can still see and click a real map.
+export async function getStaticMap(url, env) {
+  if (!configured(env)) return mapNotConfigured();
+  const lat = Number(url.searchParams.get("lat"));
+  const lng = Number(url.searchParams.get("lng"));
+  const zoom = Math.max(14, Math.min(18, Math.round(Number(url.searchParams.get("zoom")) || 16)));
+  if (!validCoordinate(lat, lng)) {
+    return json({ code: "INVALID_LOCATION", message: "地图坐标无效" }, 400);
+  }
+  const target = new URL("/ws/staticmap/v2/", "https://apis.map.qq.com");
+  target.searchParams.set("center", `${lat.toFixed(6)},${lng.toFixed(6)}`);
+  target.searchParams.set("zoom", String(zoom));
+  target.searchParams.set("size", "640*360");
+  target.searchParams.set("maptype", "roadmap");
+  target.searchParams.set("key", env.TENCENT_MAP_KEY);
+  try {
+    const response = await fetch(target, {
+      headers: { "Accept": "image/avif,image/webp,image/*,*/*;q=0.8", "Referer": "https://shopvalidator.zhangyvjing.com/" },
+      signal: AbortSignal.timeout(7000)
+    });
+    if (!response.ok) throw new Error(`腾讯静态地图请求失败：${response.status}`);
+    const type = response.headers.get("Content-Type") || "image/png";
+    if (!type.startsWith("image/")) throw new Error("腾讯静态地图返回异常");
+    return new Response(response.body, {
+      headers: {
+        "Content-Type": type,
+        "Cache-Control": "private, max-age=120",
+        "X-Content-Type-Options": "nosniff"
+      }
+    });
+  } catch (error) {
+    return json({
+      code: "STATIC_MAP_ERROR",
+      message: error instanceof Error ? error.message : "地图底图暂时不可用"
     }, 502);
   }
 }
@@ -2779,6 +2845,12 @@ export default {
     }
     if (request.method === "GET" && url.pathname === "/api/map/address-context") {
       return getAddressContext(url, env);
+    }
+    if (request.method === "GET" && url.pathname === "/api/map/pick-context") {
+      return getPickedMapContext(url, env);
+    }
+    if (request.method === "GET" && url.pathname === "/api/map/static") {
+      return getStaticMap(url, env);
     }
     if (request.method === "GET" && url.pathname === "/api/map/ip-location") {
       return getApproximateLocation(request, env);

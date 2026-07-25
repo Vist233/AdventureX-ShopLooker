@@ -62,7 +62,19 @@ def api_fixture(route: Route) -> None:
     if path.endswith("/api/leaderboard"):
         fulfill_json(route, {"cases": []})
         return
-    if path.endswith("/api/map/context") or path.endswith("/api/map/address-context"):
+    if path.endswith("/api/map/static"):
+        route.fulfill(
+            status=200,
+            content_type="image/svg+xml",
+            body=(
+                '<svg xmlns="http://www.w3.org/2000/svg" width="640" height="360">'
+                '<rect width="640" height="360" fill="#e8edf3"/>'
+                '<path d="M0 90H640M0 180H640M0 270H640M160 0V360M320 0V360M480 0V360" stroke="#b7c5d6" stroke-width="5"/>'
+                '</svg>'
+            ),
+        )
+        return
+    if path.endswith("/api/map/context") or path.endswith("/api/map/address-context") or path.endswith("/api/map/pick-context"):
         fulfill_json(
             route,
             {
@@ -71,6 +83,8 @@ def api_fixture(route: Route) -> None:
                         "address": ADDRESS,
                         "city": "上海市",
                         "district": "黄浦区",
+                        "latitude": 31.2304,
+                        "longitude": 121.4737,
                     },
                     "nearby": {
                         "count": 2,
@@ -88,6 +102,10 @@ def api_fixture(route: Route) -> None:
         fulfill_json(route, {"approximate": {"label": "上海市黄浦区"}})
         return
     if path.endswith("/api/cases") and route.request.method == "POST":
+        payload = route.request.post_data_json
+        persisted_location = payload.get("location", {}).get("context", {}).get("location", {})
+        assert "latitude" not in persisted_location
+        assert "longitude" not in persisted_location
         fulfill_json(
             route,
             {
@@ -191,6 +209,7 @@ def confirm_manual_location(page: Page) -> None:
     page.locator("#manualLocation").fill(ADDRESS)
     page.locator("#useManualLocation").click()
     expect(page.locator("#mapSummary")).to_be_visible()
+    expect(page.locator("#mapPicker")).to_be_visible()
     expect(page.locator("#mapAddress")).to_have_text(ADDRESS)
     page.locator("#confirmLocation").click()
     expect(page.locator("#beginInterview")).to_be_enabled()
@@ -306,6 +325,12 @@ def test_gps_and_number_semantics(browser, base_url: str) -> None:
     page.locator("#category").fill("快餐")
     page.locator("#locateButton").click()
     expect(page.locator("#mapSummary")).to_be_visible()
+    expect(page.locator("#mapPicker")).to_be_visible()
+    expect(page.locator("#useMapPickerPoint")).to_be_enabled()
+    page.locator("#mapPickerCanvas").click(position={"x": 210, "y": 95})
+    expect(page.locator("#mapPickerCoordinate")).to_contain_text("已选图钉")
+    page.locator("#useMapPickerPoint").click()
+    expect(page.locator("#mapAddress")).to_have_text(ADDRESS)
     expect(page.locator("#mapCompetitors")).to_have_text("2 个")
 
     semantic = page.evaluate(

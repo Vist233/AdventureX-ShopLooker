@@ -100,6 +100,12 @@ globalThis.fetch = async (input, init = {}) => {
     });
   }
 
+  if (url.pathname.includes("/staticmap/")) {
+    return new Response("static-map-fixture", {
+      headers: { "Content-Type": "image/png" }
+    });
+  }
+
   return Response.json({
     status: 0,
     count: 2,
@@ -113,13 +119,16 @@ globalThis.fetch = async (input, init = {}) => {
 const assets = { fetch: async () => new Response("asset") };
 const env = { TENCENT_MAP_KEY: "test-key", ASSETS: assets };
 const request = (path, headers = {}) => worker.fetch(
-  new Request(`https://example.com${path}`, { headers }),
+  new Request(`https://example.com${path}`, {
+    headers: { "CF-Connecting-IP": "203.0.113.77", ...headers }
+  }),
   env
 );
 const apiRequest = (path, { method = "GET", token, body, headers = {} } = {}) => worker.fetch(
   new Request(`https://example.com${path}`, {
     method,
     headers: {
+      "CF-Connecting-IP": "203.0.113.78",
       ...headers,
       ...(token ? { "X-Case-Token": token } : {}),
       ...(body !== undefined && !("Content-Type" in headers)
@@ -196,6 +205,8 @@ try {
   const gps = await gpsResponse.json();
   assert.equal(gps.context.mode, "gps");
   assert.equal(gps.context.location.district, "黄浦区");
+  assert.equal(gps.context.location.latitude, 31.2304);
+  assert.equal(gps.context.location.longitude, 121.4737);
   assert.equal(gps.context.nearby.count, 2);
   const gpsCalls = upstreamCalls.slice(gpsStart);
   assert.equal(gpsCalls.length, 3);
@@ -215,6 +226,21 @@ try {
   assert.equal(addressCalls.length, 3);
   assert.equal(addressCalls.some(({ url }) => url.pathname.includes("/coord/")), false);
   assert.equal(addressCalls[0].url.searchParams.get("address"), "上海市黄浦区测试路1号");
+
+  const pickedResponse = await request("/api/map/pick-context?lat=31.2304&lng=121.4737&category=咖啡");
+  assert.equal(pickedResponse.status, 200);
+  const picked = await pickedResponse.json();
+  assert.equal(picked.context.mode, "map-picker");
+  assert.equal(picked.context.location.latitude, 31.2304);
+
+  const staticResponse = await request("/api/map/static?lat=31.2304&lng=121.4737&zoom=16");
+  assert.equal(staticResponse.status, 200);
+  assert.equal(staticResponse.headers.get("Content-Type"), "image/png");
+  assert.equal(await staticResponse.text(), "static-map-fixture");
+  const staticCall = upstreamCalls.at(-1);
+  assert.match(staticCall.url.pathname, /staticmap/);
+  assert.equal(staticCall.url.searchParams.get("center"), "31.230400,121.473700");
+  assert.equal(staticCall.url.searchParams.get("size"), "640*360");
 
   const broadStart = upstreamCalls.length;
   const broadResponse = await request("/api/map/address-context?address=上海市");
@@ -244,7 +270,7 @@ try {
   assert.equal(ipCalls[0].url.searchParams.get("ip"), "203.0.113.8");
 
   const noIpStart = upstreamCalls.length;
-  const noIpResponse = await request("/api/map/ip-location");
+  const noIpResponse = await request("/api/map/ip-location", { "CF-Connecting-IP": "" });
   assert.equal(noIpResponse.status, 422);
   assert.equal(upstreamCalls.length, noIpStart);
 

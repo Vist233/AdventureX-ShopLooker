@@ -26,6 +26,12 @@ const state = {
   locationCandidate: null,
   locationConfirmed: false,
   mapContextLoaded: false,
+  mapPicker: {
+    center: null,
+    point: null,
+    zoom: 16,
+    requestVersion: 0
+  },
   interview: {
     active: false,
     paused: false,
@@ -244,7 +250,10 @@ function applyStageContext(stage) {
 function clearConfirmedLocation() {
   state.locationConfirmed = false;
   state.locationCandidate = null;
+  state.mapPicker.center = null;
+  state.mapPicker.point = null;
   $("mapSummary").hidden = true;
+  $("mapPicker").hidden = true;
   $("locationProof").hidden = true;
   $("locationPanel").classList.remove("location-confirmed");
   $("confirmLocation").disabled = false;
@@ -296,6 +305,14 @@ function mapContextToCandidate(data, source) {
   const context = data.context || {};
   const location = context.location || {};
   const nearby = context.nearby || {};
+  const latitude = Number(location.latitude);
+  const longitude = Number(location.longitude);
+  // Coordinates are needed only while the user is looking at the map. Keep
+  // them out of the context that later becomes the private D1 case snapshot.
+  const persistedLocation = { ...location };
+  delete persistedLocation.latitude;
+  delete persistedLocation.longitude;
+  const persistedContext = { ...context, location: persistedLocation };
   return {
     source,
     address: location.address || $("manualLocation").value.trim() || "已取得当前位置",
@@ -303,8 +320,117 @@ function mapContextToCandidate(data, source) {
     district: location.district || "",
     nearbyCount: Number.isFinite(nearby.count) ? nearby.count : null,
     places: [...(nearby.places || []), ...(context.landmarks || [])],
-    context
+    context: persistedContext,
+    coordinates: Number.isFinite(latitude) && Number.isFinite(longitude)
+      ? { latitude, longitude, coordinateSystem: context.coordinateSystem || "GCJ-02" }
+      : null
   };
+}
+
+const MAP_PICKER_SIZE = { width: 640, height: 360 };
+
+function isUsableCoordinate(point) {
+  return Number.isFinite(Number(point?.latitude)) && Number.isFinite(Number(point?.longitude))
+    && Math.abs(Number(point.latitude)) <= 90 && Math.abs(Number(point.longitude)) <= 180;
+}
+
+function projectMapPoint(point, zoom) {
+  const latitude = Math.max(-85.05112878, Math.min(85.05112878, Number(point.latitude)));
+  const world = 256 * (2 ** zoom);
+  const x = ((Number(point.longitude) + 180) / 360) * world;
+  const radians = latitude * Math.PI / 180;
+  const y = (1 - Math.asinh(Math.tan(radians)) / Math.PI) * world / 2;
+  return { x, y };
+}
+
+function unprojectMapPoint(x, y, zoom) {
+  const world = 256 * (2 ** zoom);
+  const longitude = (x / world) * 360 - 180;
+  const n = Math.PI - (2 * Math.PI * y / world);
+  const latitude = 180 / Math.PI * Math.atan(Math.sinh(n));
+  return { latitude, longitude, coordinateSystem: "GCJ-02" };
+}
+
+function formatPickerCoordinate(point) {
+  if (!isUsableCoordinate(point)) return "等待地图位置";
+  return `${Number(point.latitude).toFixed(5)}, ${Number(point.longitude).toFixed(5)}`;
+}
+
+function positionPickerPin() {
+  const pin = $("mapPickerPin");
+  const center = state.mapPicker.center;
+  const point = state.mapPicker.point;
+  if (!isUsableCoordinate(center) || !isUsableCoordinate(point)) return;
+  const centerPx = projectMapPoint(center, state.mapPicker.zoom);
+  const pointPx = projectMapPoint(point, state.mapPicker.zoom);
+  const x = 50 + ((pointPx.x - centerPx.x) / MAP_PICKER_SIZE.width) * 100;
+  const y = 50 + ((pointPx.y - centerPx.y) / MAP_PICKER_SIZE.height) * 100;
+  pin.style.left = `${Math.max(-4, Math.min(104, x))}%`;
+  pin.style.top = `${Math.max(-4, Math.min(104, y))}%`;
+}
+
+function showMapPicker(candidate) {
+  const coordinates = candidate?.coordinates;
+  if (!isUsableCoordinate(coordinates)) {
+    $("mapPicker").hidden = true;
+    return;
+  }
+  const center = { ...coordinates };
+  state.mapPicker.center = center;
+  state.mapPicker.point = { ...center };
+  const requestVersion = ++state.mapPicker.requestVersion;
+  const image = $("mapPickerImage");
+  image.src = `/api/map/static?lat=${encodeURIComponent(Number(center.latitude).toFixed(6))}&lng=${encodeURIComponent(Number(center.longitude).toFixed(6))}&zoom=${state.mapPicker.zoom}&v=${requestVersion}`;
+  $("mapPickerCoordinate").textContent = `已定位：${formatPickerCoordinate(center)} · 可点击微调`;
+  $("useMapPickerPoint").disabled = false;
+  $("mapPicker").hidden = false;
+  positionPickerPin();
+  requestAnimationFrame(() => $("mapPicker").scrollIntoView({ behavior: "smooth", block: "center" }));
+}
+
+function chooseMapPickerPoint(event) {
+  const canvas = $("mapPickerCanvas");
+  const center = state.mapPicker.center;
+  if (!isUsableCoordinate(center)) return;
+  const rect = canvas.getBoundingClientRect();
+  if (!rect.width || !rect.height) return;
+  const x = ((event.clientX - rect.left) / rect.width) * MAP_PICKER_SIZE.width;
+  const y = ((event.clientY - rect.top) / rect.height) * MAP_PICKER_SIZE.height;
+  const centerPx = projectMapPoint(center, state.mapPicker.zoom);
+  state.mapPicker.point = unprojectMapPoint(
+    centerPx.x + (x - MAP_PICKER_SIZE.width / 2),
+    centerPx.y + (y - MAP_PICKER_SIZE.height / 2),
+    state.mapPicker.zoom
+  );
+  $("mapPickerCoordinate").textContent = `已选图钉：${formatPickerCoordinate(state.mapPicker.point)}`;
+  $("useMapPickerPoint").disabled = false;
+  positionPickerPin();
+}
+
+async function useMapPickerPoint() {
+  const point = state.mapPicker.point;
+  if (!isUsableCoordinate(point)) return;
+  const attempt = ++state.locationAttempt;
+  $("useMapPickerPoint").disabled = true;
+  setLocationStatus("loading", "正在读取图钉位置的地址和周边…");
+  try {
+    const params = new URLSearchParams({
+      lat: Number(point.latitude).toFixed(6),
+      lng: Number(point.longitude).toFixed(6),
+      category: mapScanCategory()
+    });
+    if (isSiteReportMode()) params.set("rich", "1");
+    const data = await fetchJson(`/api/map/pick-context?${params}`);
+    if (attempt !== state.locationAttempt) return;
+    state.mapContextLoaded = true;
+    renderMapCandidate(mapContextToCandidate(data, "map-picker"));
+    setLocationStatus("notice", "已按图钉更新位置，请确认是不是店铺门口。");
+  } catch (error) {
+    if (attempt !== state.locationAttempt) return;
+    setLocationStatus("error", error.message || "图钉位置暂时无法解析，请重新选择。");
+  } finally {
+    $("useMapPickerPoint").disabled = false;
+  }
 }
 
 function renderMapCandidate(candidate) {
@@ -320,6 +446,7 @@ function renderMapCandidate(candidate) {
     ? names.map((name) => `<span>${escapeHtml(name)}</span>`).join("")
     : "<span>周边数据未参与判断</span>";
   $("mapSummary").hidden = false;
+  showMapPicker(candidate);
 }
 
 function confirmLocation() {
@@ -441,8 +568,7 @@ async function useDefaultLocation(reason, attempt) {
   }
   state.mapContextLoaded = true;
   renderMapCandidate(candidate);
-  confirmLocation();
-  setLocationStatus("success", `已为你使用默认地址，可以直接下一步。${DEFAULT_LOCATION_HINT}。`);
+  setLocationStatus("notice", `已为你定位到默认地址。可在地图点选店铺门口，再确认位置。${DEFAULT_LOCATION_HINT}。`);
   $("locateButton").disabled = false;
 }
 
@@ -2739,6 +2865,19 @@ document.querySelectorAll("[data-category]").forEach((button) => {
 $("category").addEventListener("input", syncCategoryChips);
 $("locateButton").addEventListener("click", locateCurrentStore);
 $("useManualLocation").addEventListener("click", () => void useManualLocation());
+$("mapPickerCanvas").addEventListener("click", chooseMapPickerPoint);
+$("mapPickerCanvas").addEventListener("keydown", (event) => {
+  if (event.key === "Enter" || event.key === " ") {
+    event.preventDefault();
+    const rect = $("mapPickerCanvas").getBoundingClientRect();
+    chooseMapPickerPoint({ clientX: rect.left + rect.width / 2, clientY: rect.top + rect.height / 2 });
+  }
+});
+$("mapPickerRelocate").addEventListener("click", locateCurrentStore);
+$("useMapPickerPoint").addEventListener("click", () => void useMapPickerPoint());
+$("mapPickerImage").addEventListener("error", () => {
+  if (!$("mapPicker").hidden) setLocationStatus("notice", "地图底图暂时未加载，但已找到地址；你仍可直接确认或重新定位。");
+});
 $("confirmLocation").addEventListener("click", confirmLocation);
 $("editLocation").addEventListener("click", editLocation);
 $("manualLocation").addEventListener("keydown", (event) => {
