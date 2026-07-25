@@ -15,6 +15,7 @@ node test_fact_store.js
 node test_decision_engine.js
 node test_interview_policy.js
 node test_site_report.mjs
+node test_shape_contract.mjs
 python build_site.py
 
 run_wrangler() {
