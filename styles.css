@@ -576,6 +576,16 @@ body { filter: grayscale(1); }
 .brand-mark { color: #111; background: #fff; }
 .primary-button, .hero-actions .primary-button { color: #fff; background: #111; border-color: #111; }
 .primary-button:hover { color: #111; background: #fff; }
+/* The primary action must read as a control before the user reads its label. */
+.hero-actions .primary-button {
+  position: relative;
+  margin: 7px;
+  border: 2px solid #111;
+  outline: 1px solid #111;
+  outline-offset: 6px;
+  box-shadow: 4px 4px 0 #111;
+}
+.hero-actions .primary-button:hover { box-shadow: 2px 2px 0 #111; transform: translate(2px, 2px); }
 .rank-badge, .plan-score, .location-proof, .map-summary,
 .preopen-rank-order, .preopen-rank-validate { color: #111 !important; background: #ececea !important; border-color: #111 !important; }
 .rank-badge-go, .rank-badge-test, .rank-badge-stop, .rank-badge-exit { color: #111 !important; background: #eee !important; border-color: #777 !important; }
