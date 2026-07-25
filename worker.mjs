@@ -1920,8 +1920,11 @@ async function startAnalysis(request, env, caseId, ctx) {
     const result = await runSiteReport(record, env, body);
     // Persist the selection (confirmed location + chosen category / "我不知道")
     // and the generated report as a completed run, so this site case is saved to
-    // D1 and can be pulled back later exactly like an interview analysis.
-    const runId = secureId("run");
+    // D1 and can be pulled back later exactly like an interview analysis. Reuse an
+    // existing run id for this case version so re-generating updates in place
+    // instead of tripping the unique (case_id, case_version) constraint.
+    const existingRun = await findRunForCaseVersion(env, record.id, record.version);
+    const runId = existingRun?.id || secureId("run");
     const timestamp = nowIso();
     const run = {
       id: runId,
@@ -1933,7 +1936,7 @@ async function startAnalysis(request, env, caseId, ctx) {
       context: null,
       searchState: null,
       warning: "",
-      createdAt: timestamp,
+      createdAt: existingRun?.createdAt || timestamp,
       updatedAt: timestamp
     };
     runStore.set(runId, run);
