@@ -24,6 +24,9 @@ def main() -> None:
 
     for filename in PUBLIC_FILES:
         shutil.copy2(ROOT / filename, DIST / filename)
+    # Publish an extensionless asset so Cloudflare's canonical HTML redirect
+    # cannot bounce `/ranking` back to itself.
+    shutil.copy2(ROOT / "ranking.html", DIST / "ranking")
     for filename in PUBLIC_DATA:
         shutil.copy2(ROOT / "data" / filename, DIST / "data" / filename)
 
