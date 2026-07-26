@@ -246,19 +246,8 @@ function administrativeAreaOnly(address) {
   return /^(?:[\p{Script=Han}]{2,12}(?:省|自治区|特别行政区))?(?:[\p{Script=Han}]{2,12}市)?(?:[\p{Script=Han}]{1,12}(?:区|县|旗))?$/u.test(compact);
 }
 
-function tencentMapKeys(env) {
-  // The second account is the active production account.  The original key is
-  // retained strictly as an outage fallback, so an exhausted first account no
-  // longer costs every map lookup an avoidable failed Tencent request.
-  // Both values remain Worker secrets and are never sent to the browser.
-  return [...new Set([
-    cleanText(env?.TENCENT_MAP_KEY_SECONDARY, 160),
-    cleanText(env?.TENCENT_MAP_KEY, 160)
-  ].filter(Boolean))];
-}
-
 function configured(env) {
-  return tencentMapKeys(env).length > 0;
+  return Boolean(cleanText(env?.TENCENT_MAP_KEY, 160));
 }
 
 function mapNotConfigured() {
@@ -268,31 +257,26 @@ function mapNotConfigured() {
   }, 503);
 }
 
-async function tencentRequest(path, params, keys) {
-  const candidates = Array.isArray(keys) ? keys : [keys];
-  let lastError = null;
-  for (const key of candidates.filter(Boolean)) {
-    try {
-      const url = new URL(path, "https://apis.map.qq.com");
-      Object.entries({ ...params, key }).forEach(([name, value]) => {
-        url.searchParams.set(name, String(value));
-      });
-      const response = await fetch(url, {
-        headers: {
-          "Accept": "application/json",
-          "Referer": "https://shopvalidator.zhangyvjing.com/"
-        },
-        signal: AbortSignal.timeout(7000)
-      });
-      if (!response.ok) throw new Error(`腾讯地图请求失败：${response.status}`);
-      const data = await response.json();
-      if (data.status !== 0) throw new Error(data.message || "腾讯地图返回异常");
-      return data;
-    } catch (error) {
-      lastError = error;
-    }
-  }
-  throw lastError || new Error("腾讯地图密钥尚未配置");
+function isTencentQuotaError(error) {
+  return /(?:每日调用量|调用量已达到上限|配额|quota)/i.test(error instanceof Error ? error.message : String(error || ""));
+}
+
+async function tencentRequest(path, params, key) {
+  const url = new URL(path, "https://apis.map.qq.com");
+  Object.entries({ ...params, key }).forEach(([name, value]) => {
+    url.searchParams.set(name, String(value));
+  });
+  const response = await fetch(url, {
+    headers: {
+      "Accept": "application/json",
+      "Referer": "https://shopvalidator.zhangyvjing.com/"
+    },
+    signal: AbortSignal.timeout(7000)
+  });
+  if (!response.ok) throw new Error(`腾讯地图请求失败：${response.status}`);
+  const data = await response.json();
+  if (data.status !== 0) throw new Error(data.message || "腾讯地图返回异常");
+  return data;
 }
 
 // Environment signal groups scanned in site-report (rich) mode: who lives,
@@ -397,7 +381,7 @@ async function buildContextFromGcj02(lat, lng, category, keys, options = {}) {
 
 export async function getMapContext(url, env) {
   if (!configured(env)) return mapNotConfigured();
-  const keys = tencentMapKeys(env);
+  const key = env.TENCENT_MAP_KEY;
 
   const lat = Number(url.searchParams.get("lat"));
   const lng = Number(url.searchParams.get("lng"));
@@ -413,7 +397,7 @@ export async function getMapContext(url, env) {
       locations: `${lat},${lng}`,
       type: 1,
       output: "json"
-    }, keys);
+    }, key);
     const mapLocation = translated.locations?.[0];
     const mapLat = Number(mapLocation?.lat);
     const mapLng = Number(mapLocation?.lng);
@@ -421,7 +405,7 @@ export async function getMapContext(url, env) {
       throw new Error("腾讯地图坐标转换失败");
     }
 
-    return json(await buildContextFromGcj02(mapLat, mapLng, category, keys, {
+    return json(await buildContextFromGcj02(mapLat, mapLng, category, key, {
       mode: "gps",
       rich: url.searchParams.get("rich") === "1"
     }));
@@ -435,7 +419,7 @@ export async function getMapContext(url, env) {
 
 export async function getAddressContext(url, env) {
   if (!configured(env)) return mapNotConfigured();
-  const keys = tencentMapKeys(env);
+  const key = env.TENCENT_MAP_KEY;
 
   const address = trimText(url.searchParams.get("address"));
   if (address.length < 3) {
@@ -450,11 +434,33 @@ export async function getAddressContext(url, env) {
   const category = cleanText(url.searchParams.get("category"), 24) || "餐饮";
 
   try {
-    const geocoded = await tencentRequest("/ws/geocoder/v1/", {
-      address,
-      output: "json"
-    }, keys);
-    const location = geocoded.result?.location;
+    let geocoded = null;
+    let location = null;
+    let mode = "address";
+    let fallbackAddress = address;
+    try {
+      geocoded = await tencentRequest("/ws/geocoder/v1/", {
+        address,
+        output: "json"
+      }, key);
+      location = geocoded.result?.location;
+    } catch (error) {
+      if (!isTencentQuotaError(error)) throw error;
+      // Tencent meters quotas by API family. When only Geocoder is exhausted,
+      // resolve a *candidate* through Place Suggestion and force the existing
+      // map-confirmation step instead of blocking the entire location flow.
+      const suggested = await tencentRequest("/ws/place/v1/suggestion", {
+        keyword: address,
+        page_size: 1,
+        policy: 1,
+        output: "json"
+      }, key);
+      const candidate = (suggested.data || []).find((item) => validCoordinate(Number(item?.location?.lat), Number(item?.location?.lng)));
+      if (!candidate) throw error;
+      location = candidate.location;
+      mode = "address-suggestion";
+      fallbackAddress = cleanText(candidate.address || candidate.title, 100) || address;
+    }
     const lat = Number(location?.lat);
     const lng = Number(location?.lng);
     if (!validCoordinate(lat, lng)) {
@@ -463,7 +469,7 @@ export async function getAddressContext(url, env) {
         message: "没有找到这个地址，请补充城市、商圈或门牌号"
       }, 422);
     }
-    const level = cleanText(geocoded.result?.level, 16);
+    const level = cleanText(geocoded?.result?.level, 16);
     if (["国家", "省", "城市", "区县", "行政区"].includes(level)) {
       return json({
         code: "ADDRESS_TOO_BROAD",
@@ -471,9 +477,9 @@ export async function getAddressContext(url, env) {
       }, 422);
     }
 
-    return json(await buildContextFromGcj02(lat, lng, category, keys, {
-      mode: "address",
-      fallbackAddress: address,
+    return json(await buildContextFromGcj02(lat, lng, category, key, {
+      mode,
+      fallbackAddress,
       rich: url.searchParams.get("rich") === "1"
     }));
   } catch (error) {
@@ -488,7 +494,7 @@ export async function getAddressContext(url, env) {
 // separate from browser GPS avoids applying the WGS84→GCJ02 conversion twice.
 export async function getPickedMapContext(url, env) {
   if (!configured(env)) return mapNotConfigured();
-  const keys = tencentMapKeys(env);
+  const key = env.TENCENT_MAP_KEY;
   const lat = Number(url.searchParams.get("lat"));
   const lng = Number(url.searchParams.get("lng"));
   if (!validCoordinate(lat, lng)) {
@@ -496,7 +502,7 @@ export async function getPickedMapContext(url, env) {
   }
   const category = cleanText(url.searchParams.get("category"), 24) || "餐饮";
   try {
-    return json(await buildContextFromGcj02(lat, lng, category, keys, {
+    return json(await buildContextFromGcj02(lat, lng, category, key, {
       mode: "map-picker",
       rich: url.searchParams.get("rich") === "1"
     }));
@@ -512,42 +518,34 @@ export async function getPickedMapContext(url, env) {
 // key stays private, while the browser can still see and click a real map.
 export async function getStaticMap(url, env) {
   if (!configured(env)) return mapNotConfigured();
-  const keys = tencentMapKeys(env);
+  const key = env.TENCENT_MAP_KEY;
   const lat = Number(url.searchParams.get("lat"));
   const lng = Number(url.searchParams.get("lng"));
   const zoom = Math.max(14, Math.min(18, Math.round(Number(url.searchParams.get("zoom")) || 16)));
   if (!validCoordinate(lat, lng)) {
     return json({ code: "INVALID_LOCATION", message: "地图坐标无效" }, 400);
   }
-  let lastError = null;
   try {
-    for (const key of keys) {
-      try {
-        const target = new URL("/ws/staticmap/v2/", "https://apis.map.qq.com");
-        target.searchParams.set("center", `${lat.toFixed(6)},${lng.toFixed(6)}`);
-        target.searchParams.set("zoom", String(zoom));
-        target.searchParams.set("size", "640*360");
-        target.searchParams.set("maptype", "roadmap");
-        target.searchParams.set("key", key);
-        const response = await fetch(target, {
-          headers: { "Accept": "image/avif,image/webp,image/*,*/*;q=0.8", "Referer": "https://shopvalidator.zhangyvjing.com/" },
-          signal: AbortSignal.timeout(7000)
-        });
-        if (!response.ok) throw new Error(`腾讯静态地图请求失败：${response.status}`);
-        const type = response.headers.get("Content-Type") || "image/png";
-        if (!type.startsWith("image/")) throw new Error("腾讯静态地图返回异常");
-        return new Response(response.body, {
-          headers: {
-            "Content-Type": type,
-            "Cache-Control": "private, max-age=120",
-            "X-Content-Type-Options": "nosniff"
-          }
-        });
-      } catch (error) {
-        lastError = error;
+    const target = new URL("/ws/staticmap/v2/", "https://apis.map.qq.com");
+    target.searchParams.set("center", `${lat.toFixed(6)},${lng.toFixed(6)}`);
+    target.searchParams.set("zoom", String(zoom));
+    target.searchParams.set("size", "640*360");
+    target.searchParams.set("maptype", "roadmap");
+    target.searchParams.set("key", key);
+    const response = await fetch(target, {
+      headers: { "Accept": "image/avif,image/webp,image/*,*/*;q=0.8", "Referer": "https://shopvalidator.zhangyvjing.com/" },
+      signal: AbortSignal.timeout(7000)
+    });
+    if (!response.ok) throw new Error(`腾讯静态地图请求失败：${response.status}`);
+    const type = response.headers.get("Content-Type") || "image/png";
+    if (!type.startsWith("image/")) throw new Error("腾讯静态地图返回异常");
+    return new Response(response.body, {
+      headers: {
+        "Content-Type": type,
+        "Cache-Control": "private, max-age=120",
+        "X-Content-Type-Options": "nosniff"
       }
-    }
-    throw lastError || new Error("腾讯地图密钥尚未配置");
+    });
   } catch (error) {
     return json({
       code: "STATIC_MAP_ERROR",
@@ -565,7 +563,7 @@ function clientIp(request) {
 
 export async function getApproximateLocation(request, env) {
   if (!configured(env)) return mapNotConfigured();
-  const keys = tencentMapKeys(env);
+  const key = env.TENCENT_MAP_KEY;
   const ip = clientIp(request);
   if (!ip) {
     return json({
@@ -578,7 +576,7 @@ export async function getApproximateLocation(request, env) {
     const located = await tencentRequest("/ws/location/v1/ip", {
       ip,
       output: "json"
-    }, keys);
+    }, key);
     const adInfo = located.result?.ad_info || {};
     const province = cleanText(adInfo.province, 20);
     const city = cleanText(adInfo.city, 20);

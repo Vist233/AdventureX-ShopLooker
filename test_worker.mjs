@@ -16,6 +16,7 @@ const upstreamCalls = [];
 let stepfunActive = 0;
 let stepfunMaxActive = 0;
 let stepfunFailuresRemaining = 0;
+let geocoderQuotaFailuresRemaining = 0;
 
 globalThis.fetch = async (input, init = {}) => {
   const url = new URL(input);
@@ -69,8 +70,9 @@ globalThis.fetch = async (input, init = {}) => {
 
   if (url.pathname.includes("/geocoder/") && url.searchParams.has("address")) {
     const address = url.searchParams.get("address");
-    if (address === "备用Key测试地址" && url.searchParams.get("key") === "backup-test-key") {
-      return Response.json({ status: 120, message: "当前活跃密钥额度已用尽" });
+    if (geocoderQuotaFailuresRemaining > 0) {
+      geocoderQuotaFailuresRemaining -= 1;
+      return Response.json({ status: 121, message: "此key每日调用量已达到上限" });
     }
     if (address === "上游失败测试地址") {
       return Response.json({ status: 120, message: "模拟上游错误" });
@@ -100,6 +102,17 @@ globalThis.fetch = async (input, init = {}) => {
         ad_info: { adcode: "310101" },
         pois: [{ title: "测试商场", category: "购物:商场", _distance: 80, _dir_desc: "东" }]
       }
+    });
+  }
+
+  if (url.pathname.includes("/suggestion")) {
+    return Response.json({
+      status: 0,
+      data: [{
+        title: "测试路候选点",
+        address: "上海市黄浦区测试路1号",
+        location: { lat: 31.2304, lng: 121.4737 }
+      }]
     });
   }
 
@@ -286,15 +299,17 @@ try {
   assert.equal(addressCalls.some(({ url }) => url.pathname.includes("/coord/")), false);
   assert.equal(addressCalls[0].url.searchParams.get("address"), "上海市黄浦区测试路1号");
 
-  const fallbackStart = upstreamCalls.length;
-  const fallbackResponse = await worker.fetch(
-    new Request("https://example.com/api/map/address-context?address=备用Key测试地址&category=咖啡"),
-    { ...env, TENCENT_MAP_KEY_SECONDARY: "backup-test-key" }
+  geocoderQuotaFailuresRemaining = 1;
+  const quotaFallbackStart = upstreamCalls.length;
+  const quotaFallbackResponse = await request(
+    "/api/map/address-context?address=上海市黄浦区测试路1号&category=咖啡"
   );
-  assert.equal(fallbackResponse.status, 200);
-  const fallbackCalls = upstreamCalls.slice(fallbackStart);
-  assert.equal(fallbackCalls[0].url.searchParams.get("key"), "backup-test-key");
-  assert.equal(fallbackCalls[1].url.searchParams.get("key"), "test-key");
+  assert.equal(quotaFallbackResponse.status, 200);
+  const quotaFallback = await quotaFallbackResponse.json();
+  assert.equal(quotaFallback.context.mode, "address-suggestion");
+  const quotaFallbackCalls = upstreamCalls.slice(quotaFallbackStart);
+  assert.match(quotaFallbackCalls[0].url.pathname, /geocoder/);
+  assert.match(quotaFallbackCalls[1].url.pathname, /suggestion/);
 
   const pickedResponse = await request("/api/map/pick-context?lat=31.2304&lng=121.4737&category=咖啡");
   assert.equal(pickedResponse.status, 200);

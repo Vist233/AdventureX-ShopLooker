@@ -64,7 +64,6 @@ DASHSCOPE_TTS_INSTRUCTIONS = "温柔、自然、有专业感的年轻女声；�
 # or, for a server-only comma/newline-separated key pool:
 #   npx wrangler secret put STEPFUN_API_KEYS
 #   npx wrangler secret put TENCENT_MAP_KEY
-#   npx wrangler secret put TENCENT_MAP_KEY_SECONDARY
 #   npx wrangler secret put DASHSCOPE_API_KEY
 #
 # Production analysis uses ANALYSIS_QUEUE. Each run creates exactly 3 candidate
