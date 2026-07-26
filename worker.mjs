@@ -247,12 +247,13 @@ function administrativeAreaOnly(address) {
 }
 
 function tencentMapKeys(env) {
-  // Keep the primary key first, then retry the secondary key only when Tencent
-  // rejects or cannot serve a request.  The keys remain Worker secrets: no map
-  // request ever exposes either value to the browser.
+  // The second account is the active production account.  The original key is
+  // retained strictly as an outage fallback, so an exhausted first account no
+  // longer costs every map lookup an avoidable failed Tencent request.
+  // Both values remain Worker secrets and are never sent to the browser.
   return [...new Set([
-    cleanText(env?.TENCENT_MAP_KEY, 160),
-    cleanText(env?.TENCENT_MAP_KEY_SECONDARY, 160)
+    cleanText(env?.TENCENT_MAP_KEY_SECONDARY, 160),
+    cleanText(env?.TENCENT_MAP_KEY, 160)
   ].filter(Boolean))];
 }
 
