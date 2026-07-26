@@ -134,9 +134,17 @@ flowchart TD
 | API | 用途 |
 |---|---|
 | `GET /api/leaderboard` | 获取仅含公开快照的榜单 |
+| `GET /api/public-cases/:id` | 获取一份已公开且脱敏的匿名判断票（供 `/case/:id/` 分享链接使用） |
 | `POST /api/cases/:caseId/publish` | 使用私有案卷令牌匿名发布 |
 | `POST /api/public-cases/:id` | 使用管理令牌回填结构化前后数据 |
 | `DELETE /api/public-cases/:id` | 使用管理令牌下架案例 |
+
+### 可分享公开路径与打印票
+
+- 规范 URL 是 `/ranking`、`/demo/` 与 `/case/:publicId/`；`/ranking.html` 与 `/ranking/` 都会跳转到 `/ranking`，避免静态托管层的尾斜杠循环。
+- 结果达到匿名公开门槛后，私有结果页会出现「打印 / 分享判断票」。票上二维码与文字链接都只指向 `/case/:publicId/`。
+- 分享页只读取 `public_cases.snapshot_json` 的脱敏快照。它不会读取或显示源案卷、地址、身份、录音、原始转写、完整账目、案卷令牌或管理令牌。
+- 二维码由浏览器加载公开 URL 的 SVG 编码图；二维码加载慢时，票面上的可点击文字 URL 仍可直接打开同一记录。
 
 ## 部署与数据库
 
@@ -145,6 +153,16 @@ flowchart TD
 - 发布：`deploy.sh`
 - D1：`yongge-cases`，绑定名 `DB`
 - 已执行生产迁移：`migrations/0002_public_cases.sql`
+
+### StoreValidator 版式分支
+
+- 分支：`storevalidator-receipt-review`
+- 站点：`https://storevalidator.zhangyvjing.com`
+- 演示：`https://storevalidator.zhangyvjing.com/demo`
+- 配置：`wrangler.storevalidator.toml`
+- 发布：`deploy-storevalidator.sh`
+
+这个站点只承载独立版本的静态前端（全站字体与第三步“事实核对单”的票据式布局）。正式入口与 `/demo` 是同一条 StoreValidator 分线的两个独立入口：Demo 自动加载山西运城小碗菜案例，进入第三步时同样显示票据式事实核对。它将同源 `/api/*` 请求转发到 `shopvalidator.zhangyvjing.com` 的现有决策后端，因此不会复制 D1 案卷、排行榜、队列、Durable Object 或模型密钥，也不会与正式 Worker 竞争队列消费。
 
 常规发布：
 

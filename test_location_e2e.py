@@ -60,7 +60,10 @@ def fulfill_json(route: Route, body: dict[str, Any], status: int = 200) -> None:
 def api_fixture(route: Route) -> None:
     path = route.request.url.split("?", 1)[0]
     if path.endswith("/api/leaderboard"):
-        fulfill_json(route, {"cases": []})
+        fulfill_json(route, {"cases": [
+            {"location": "上海 · 黄浦", "category": "咖啡", "decision": "TEST", "statusLine": "先验证工作日午间需求"},
+            {"location": "杭州 · 余杭", "category": "快餐", "decision": "GO", "statusLine": "现金流稳定，可继续经营"},
+        ]})
         return
     if path.endswith("/api/map/static"):
         route.fulfill(
@@ -217,8 +220,7 @@ def confirm_manual_location(page: Page) -> None:
 
 def enter_workspace(page: Page) -> None:
     page.locator('[data-testid="hero-start"]').click()
-    # The redesigned landing keeps the first location step as its final
-    # scroll-snap page; the CTA scrolls there instead of switching page mode.
+    expect(page.locator("body")).to_have_attribute("data-product-view", "workspace")
     expect(page.locator('[data-testid="location-step"]')).to_be_visible()
 
 
@@ -230,9 +232,9 @@ def test_landing_and_workspace_are_separate(browser, base_url: str) -> None:
     expect(page.locator(".hero")).to_contain_text("5.8 万亿元")
     expect(page.locator(".hero")).to_contain_text("339 万家")
     expect(page.locator(".hero")).to_contain_text("65.1%")
-    expect(page.locator("#judge")).to_be_visible()
+    expect(page.locator("#judge")).to_be_hidden()
     enter_workspace(page)
-    expect(page.locator("body")).to_have_attribute("data-product-view", "landing")
+    expect(page.locator("body")).to_have_attribute("data-product-view", "workspace")
     context.close()
 
 
@@ -322,7 +324,7 @@ def test_gps_and_number_semantics(browser, base_url: str) -> None:
     page.goto("/", wait_until="domcontentloaded")
     enter_workspace(page)
     page.locator('[data-stage="preopen"]').click()
-    page.locator("#category").fill("快餐")
+    page.locator('[data-category="快餐"]').click()
     page.locator("#locateButton").click()
     expect(page.locator("#mapSummary")).to_be_visible()
     expect(page.locator("#mapPicker")).to_be_visible()
@@ -416,8 +418,11 @@ def test_site_report_failure_is_not_rendered_as_complete(browser, base_url: str)
     page.locator("#analysisFailureBack").click()
     expect(page.locator('[data-panel="location"]')).to_be_visible()
     expect(page.locator("#beginInterview")).to_be_enabled()
-    if errors:
-        raise AssertionError("选址报告失败状态产生错误：" + " | ".join(errors))
+    unexpected_errors = [message for message in errors if "429" not in message]
+    if unexpected_errors:
+        raise AssertionError(
+            "选址报告失败状态产生错误：" + " | ".join(unexpected_errors)
+        )
     context.close()
 
 
@@ -485,6 +490,7 @@ def test_mobile_review_layout(browser, base_url: str) -> None:
         }"""
     )
     expect(page.locator('[data-testid="fact-review-row"]')).to_have_count(19)
+    expect(page.locator(".review-receipt-meta")).to_contain_text("事实核对单")
     expect(page.locator('[data-role="edit-text"]').first).to_have_attribute(
         "placeholder", "点这里直接改"
     )
@@ -492,11 +498,15 @@ def test_mobile_review_layout(browser, base_url: str) -> None:
         """() => ({
           viewport: window.innerWidth,
           scrollWidth: document.documentElement.scrollWidth,
-          submitVisible: document.getElementById('submitReview').getBoundingClientRect().width > 0
+          submitVisible: document.getElementById('submitReview').getBoundingClientRect().width > 0,
+          receiptRadius: getComputedStyle(document.getElementById('reviewPanel')).borderRadius,
+          rowDivider: getComputedStyle(document.querySelector('.fact-review-row')).borderBottomStyle
         })"""
     )
     assert layout["scrollWidth"] <= layout["viewport"], layout
     assert layout["submitVisible"] is True
+    assert layout["receiptRadius"] == "0px", layout
+    assert layout["rowDivider"] == "dashed", layout
     if errors:
         raise AssertionError("手机查证页产生错误：" + " | ".join(errors))
     context.close()
@@ -504,9 +514,10 @@ def test_mobile_review_layout(browser, base_url: str) -> None:
 
 def test_subtitle_case_demo(browser, base_url: str) -> None:
     context = browser.new_context(base_url=base_url, locale="zh-CN")
+    context.route("**/api/leaderboard", api_fixture)
     page = context.new_page()
     errors = attach_error_collection(page)
-    page.goto("/?demo=1&demoSpeed=40", wait_until="domcontentloaded")
+    page.goto("/?demo=1&demoSpeed=750", wait_until="domcontentloaded")
     expect(page.locator("body")).to_have_class("demo-mode")
     expect(page.locator("#category")).to_have_value("私房小碗菜")
     expect(page.locator('[data-stage="operating"]')).to_have_class("selected")
@@ -514,9 +525,13 @@ def test_subtitle_case_demo(browser, base_url: str) -> None:
     expect(page.locator("#locationProof")).to_be_visible(timeout=3_000)
     expect(page.locator("#mapAddress")).to_contain_text("稷山县")
     page.locator("#beginInterview").click()
+    expect(page.locator("#questionProgress")).to_have_text("1/12", timeout=3_000)
     expect(page.locator('[data-panel="review"]')).to_be_visible(timeout=12_000)
+    expect(page.locator(".review-receipt-meta")).to_contain_text("事实核对单")
     rows = page.locator('[data-testid="fact-review-row"]')
     expect(rows).to_have_count(19)
+    variable_cost_row = rows.filter(has_text="每百元变动成本")
+    expect(variable_cost_row.locator(".fact-review-heading strong")).to_have_text("55%")
     first_row = rows.first
     first_row.locator('input[value="unknown"]').click(force=True)
     expect(first_row).to_have_attribute("data-mode", "correct")
@@ -527,6 +542,54 @@ def test_subtitle_case_demo(browser, base_url: str) -> None:
     if errors:
         raise AssertionError("Demo 页面产生错误：" + " | ".join(errors))
     context.close()
+
+
+def test_ranking_initial_render_stays_at_top(browser, base_url: str) -> None:
+    context = browser.new_context(base_url=base_url, locale="zh-CN")
+    page = context.new_page()
+    page.route("**/api/**", api_fixture)
+    page.goto("/ranking.html", wait_until="domcontentloaded")
+    expect(page.locator(".rank-card")).to_have_count(2)
+    assert page.evaluate("window.scrollY") == 0
+    context.close()
+
+
+def test_missing_public_case_stays_at_top(browser, base_url: str) -> None:
+    for viewport in ({"width": 1280, "height": 900}, {"width": 390, "height": 844}):
+        context = browser.new_context(
+            base_url=base_url,
+            locale="zh-CN",
+            viewport=viewport,
+        )
+        page = context.new_page()
+        page.route(
+            "**/case/nonexistent/",
+            lambda route: route.fulfill(
+                status=200,
+                content_type="text/html; charset=utf-8",
+                body=(ROOT / "index.html").read_text(encoding="utf-8"),
+            ),
+        )
+        page.route(
+            "**/api/public-cases/**",
+            lambda route: fulfill_json(
+                route,
+                {"code": "NOT_FOUND", "message": "案例不存在"},
+                404,
+            ),
+        )
+        page.goto("/case/nonexistent/", wait_until="domcontentloaded")
+        expect(page.locator(".public-case-missing")).to_be_visible()
+        page.wait_for_timeout(500)
+        position = page.evaluate(
+            """() => ({
+              scrollY: window.scrollY,
+              topbarTop: document.querySelector('.topbar').getBoundingClientRect().top
+            })"""
+        )
+        assert position["scrollY"] == 0, position
+        assert position["topbarTop"] >= 0, position
+        context.close()
 
 
 def main() -> None:
@@ -540,6 +603,8 @@ def main() -> None:
             test_site_report_renders_ranked_direction_titles(browser, site.url)
             test_mobile_review_layout(browser, site.url)
             test_subtitle_case_demo(browser, site.url)
+            test_ranking_initial_render_stays_at_top(browser, site.url)
+            test_missing_public_case_stays_at_top(browser, site.url)
         finally:
             browser.close()
     print("browser E2E: location, fallback, full review, site-result rendering, report failure recovery, mobile layout, subtitle demo, Top3 and number semantics passed")

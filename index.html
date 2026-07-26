@@ -5,28 +5,30 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="description" content="勇哥判店：先确认位置，用持续语音完成经营问诊，再从候选方案中选出可验证行动。">
   <title>勇哥判店 · 先判断，再投钱</title>
-  <link rel="icon" type="image/jpeg" href="icon.jpeg">
-  <link rel="stylesheet" href="styles.css">
+  <link rel="icon" type="image/jpeg" href="/icon.jpeg">
+  <link rel="stylesheet" href="/styles.css?v=receipt-sync-3">
 </head>
 <body data-product-view="landing">
   <header class="topbar">
     <a class="brand" href="#top" aria-label="勇哥判店首页">
-      <img class="brand-logo" src="icon.jpeg" alt="">
+      <img class="brand-logo" src="/icon.jpeg" alt="">
       <span>勇哥判店</span>
     </a>
-    <span class="topbar-stat">整理 <b id="headerTitles">623</b> 个公开餐饮案例，筛选 <b id="headerTranscripts">156</b> 份高可信案例提取判断维度</span>
+    <span class="topbar-stat">已归档 <b id="headerTitles">623</b> 例 · 高可信 <b id="headerTranscripts">156</b> 例</span>
+    <a class="topbar-ranking" href="/ranking">公开案例账单</a>
   </header>
 
   <main id="top">
     <section class="hero" data-landing>
       <div>
         <span class="eyebrow">勇哥判店 · 餐饮经营决策检查</span>
-        <h1>花<em>十万</em>之前<br>先花<em>十分钟</em></h1>
+        <h1 class="hero-title-note"><span>花<em>十万</em>之前<br>先花<em>十分钟</em></span></h1>
         <p>通过一次持续语音问诊，勇哥判店帮助你确认经营事实、算清保本条件，并判断下一步应该继续、验证、调整还是退出。</p>
         <p class="hero-shortline">说十分钟，先判断这家店该开、该改，还是该停。</p>
         <div class="hero-actions">
           <a class="primary-button" href="#judge" data-testid="hero-start">开始店铺问诊</a>
-          <a class="ranking-button" href="/ranking.html" data-testid="hero-ranking"><b>看看别人的店</b> · 已核验案例排行榜<span>→</span></a>
+          <a class="demo-button" href="/demo/" data-testid="hero-demo">直接使用山西运城小碗菜的数据试试看</a>
+          <a class="ranking-button" href="/ranking" data-testid="hero-ranking"><span>已核验的匿名经营案例</span><b>查看公开案例账单 →</b></a>
         </div>
       </div>
       <aside class="market-signal" aria-label="餐饮行业风险信号">
@@ -40,6 +42,11 @@
           <span>停业商户中开业不足两年的比例</span><strong>65.1%</strong><p>许多错误发生在最初两年</p>
         </article>
       </aside>
+    </section>
+
+    <section class="landing-conclusion" data-landing>
+      <p>餐饮市场仍在增长，约 3/4 的门店没有撑过第二年。</p>
+      <strong>行业有需求，不代表每一家店都有成立条件。</strong>
     </section>
 
     <section class="landing-section fact-error-section" data-landing>
@@ -69,6 +76,19 @@
         </article>
       </div>
       <p class="section-conclusion">事实没有确认，后面的每一个精确结论，都可能只是精确的错误。</p>
+    </section>
+
+    <section class="landing-section method-section" data-landing>
+      <div class="landing-section-heading">
+        <span class="section-kicker">勇哥判店怎么做</span>
+        <h2>说清楚 → 认清楚 → 算清楚 → 试清楚</h2>
+      </div>
+      <div class="method-lanes">
+        <article><b>01</b><h3>说出来</h3><p>不用填写复杂经营表格，持续语音回答问题。</p></article>
+        <article><b>02</b><h3>确认事实</h3><p>金额、周期、比例、未知项全部通过选择题纠正。</p></article>
+        <article><b>03</b><h3>程序算账</h3><p>保本营业额、真实成本、现金寿命由确定性程序计算。</p></article>
+        <article><b>04</b><h3>做一个实验</h3><p>最多留下三个有预算、期限、指标、成功线和停止线的行动。</p></article>
+      </div>
     </section>
 
     <section class="landing-section yongge-section" data-landing>
@@ -189,7 +209,7 @@
             开始问诊并持续录音
           </button>
 
-          <a class="panel-demo-link" id="panelDemoLink" href="https://demo.shopvalidator.zhangyvjing.com" data-testid="bottom-demo" hidden>直接使用山西运城小碗菜的记录分析 <span>→</span></a>
+          <a class="panel-demo-link" id="panelDemoLink" href="/demo" data-testid="bottom-demo" hidden>直接使用山西运城小碗菜的记录分析 <span>→</span></a>
         </section>
 
         <section class="flow-card flow-panel interview-panel" id="interviewPanel" data-panel="interview" hidden data-testid="interview-step">
@@ -221,6 +241,10 @@
         </section>
 
         <section class="flow-card flow-panel review-panel" id="reviewPanel" data-panel="review" hidden data-testid="review-step">
+          <div class="review-receipt-meta" aria-hidden="true">
+            <span>事实核对单</span>
+            <span>STEP 03 / REVIEW</span>
+          </div>
           <div class="step-title">
             <span>第三步</span>
             <h3>一次看完所有记录</h3>
@@ -246,7 +270,9 @@
 
         <section class="flow-card flow-panel analysis-panel" id="analysisPanel" data-panel="result" hidden data-testid="analysis-step">
           <div id="analysisProgress" data-testid="analysis-progress">
-            <video class="analysis-loading" src="loading.mp4" autoplay loop muted playsinline aria-hidden="true"></video>
+            <div class="analysis-media" aria-hidden="true">
+              <video class="analysis-loading" src="/loading.mp4" autoplay loop muted playsinline></video>
+            </div>
             <b id="analysisPercent">0%</b>
             <span class="section-kicker">正在后台分析</span>
             <h3 id="analysisTitle">先按勇哥框架算账</h3>
@@ -277,7 +303,7 @@
             </div>
             <div class="result-metrics" id="resultMetrics"></div>
             <div class="narrative" id="narrative"></div>
-            <details class="result-fact-evidence" id="resultFactEvidence" data-testid="result-fact-evidence">
+            <details class="result-fact-evidence taped-evidence-note" id="resultFactEvidence" data-testid="result-fact-evidence">
               <summary>查看事实与核验依据</summary>
               <div>
                 <span class="section-kicker">本次判断基于什么</span>
@@ -307,7 +333,7 @@
               <p>下面是已核验的匿名案例。点开任意一张，就是这家店完整的分析结果页——含判断依据、下一步方案与被淘汰的理由。</p>
             </div>
             <div class="ranking-list" id="resultRankingList" aria-live="polite"><p>正在载入案例…</p></div>
-            <a class="result-leaderboard-more" href="/ranking.html">查看完整排行榜 →</a>
+            <a class="result-leaderboard-more" href="/ranking">查看完整排行榜 →</a>
           </section>
         </section>
       </div>
@@ -320,9 +346,10 @@
   </main>
 
   <footer data-landing>
-    <div><img class="brand-logo small" src="icon.jpeg" alt=""><b>勇哥判店</b></div>
+    <div class="barcode-wrap" aria-hidden="true"><div class="barcode"></div><span>YONGGE-PANDIAN · v2026.07</span></div>
+    <div><img class="brand-logo small" src="/icon.jpeg" alt=""><b>勇哥判店</b></div>
     <p>经营决策筛查工具，不替代会计、法律或投资意见。</p>
-    <span>整理 <b id="heroTitles">623</b> 个公开餐饮案例，筛选 <b id="heroTranscripts">156</b> 份高可信案例提取判断维度</span>
+    <span><b id="heroTitles">623</b> 个真实餐饮案例校准 <i hidden id="heroTranscripts">156</i></span>
   </footer>
 
   <dialog class="plan-detail-dialog" id="planDetailDialog" aria-labelledby="planDetailTitle">
@@ -338,9 +365,20 @@
     <div class="case-detail-bar"><span class="section-kicker" id="caseDetailKicker">案例分析结果</span><button class="dialog-close" id="closeCaseDetail" type="button" aria-label="关闭案例详情">×</button></div>
     <div class="case-detail-body" id="caseDetailBody"></div>
   </dialog>
+  <dialog class="share-receipt-dialog" id="shareReceiptDialog" aria-labelledby="shareReceiptTitle">
+    <div class="case-detail-bar share-receipt-bar">
+      <span class="section-kicker" id="shareReceiptTitle">匿名经营判断票</span>
+      <button class="dialog-close" id="closeShareReceipt" type="button" aria-label="关闭分享票">×</button>
+    </div>
+    <div class="share-receipt-body" id="shareReceiptBody"></div>
+    <div class="share-receipt-controls">
+      <button class="secondary-button" id="copyShareLink" type="button">复制链接</button>
+      <button class="primary-button" id="printShareReceipt" type="button">打印这张票</button>
+    </div>
+  </dialog>
 
-  <script src="fact-store.js"></script>
-  <script src="decision-engine.js"></script>
-  <script src="app.js"></script>
+  <script src="/fact-store.js"></script>
+  <script src="/decision-engine.js"></script>
+  <script src="/app.js?v=share-routes-1"></script>
 </body>
 </html>

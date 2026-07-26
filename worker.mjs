@@ -40,7 +40,7 @@ const MAX_ASR_SESSIONS_PER_CASE = 3;
 const MAX_ASR_SESSION_MS = 20 * 60 * 1000;
 const MAX_ASR_AUDIO_BYTES = 40 * 1024 * 1024;
 const MAX_ASR_CLIP_BYTES = 3 * 1024 * 1024;
-export const ASR_SILENCE_DURATION_MS = 350;
+const ASR_SILENCE_DURATION_MS = 350;
 const SEARCH_TARGET = 2;
 const SEARCH_ROUNDS = 1;
 const SEARCH_CONCURRENCY = 1;
@@ -1247,7 +1247,10 @@ async function interviewTurn(request, env, caseId) {
   const body = await readJson(request);
   const transcript = trimText(body.answer ?? body.transcript, 4000);
   const source = ["voice", "typed", "choice"].includes(body.source) ? body.source : "voice";
-  if (transcript.length < 2) {
+  // `0` is a complete answer for numeric facts such as debt and must never be
+  // confused with an empty transcript.  The field-specific FactArchive
+  // normalizer below remains responsible for validating its meaning.
+  if (!transcript) {
     return apiJson(request, env, {
       code: "EMPTY_TRANSCRIPT",
       message: "没有识别到有效回答，请继续说或选择不知道"
@@ -2672,7 +2675,7 @@ async function asrRelay(request, env, caseId, ctx) {
   return new Response(null, { status: 101, webSocket: client });
 }
 
-export const PUBLIC_METRICS = new Set(["revenue", "orders", "gross_margin", "cost", "cash_burn"]);
+const PUBLIC_METRICS = new Set(["revenue", "orders", "gross_margin", "cost", "cash_burn"]);
 const LOWER_IS_BETTER = new Set(["cost", "cash_burn"]);
 
 function publicDecisionLabel(decision) {
@@ -2722,10 +2725,50 @@ async function readPublicCases(env) {
   }));
 }
 
+async function readPublicCase(env, publicId) {
+  if (!publicId) return null;
+  if (!env.DB) {
+    const row = publicCaseStore.get(publicId);
+    return row?.isActive ? row : null;
+  }
+  const row = await env.DB.prepare("SELECT * FROM public_cases WHERE id = ? AND is_active = 1")
+    .bind(publicId).first();
+  if (!row) return null;
+  return {
+    id: row.id,
+    snapshot: JSON.parse(row.snapshot_json || "{}"),
+    dataScore: Number(row.data_score),
+    outcomeScore: Number(row.outcome_score),
+    rankScore: Number(row.rank_score),
+    isActive: Boolean(row.is_active),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at
+  };
+}
+
 async function leaderboard(request, env) {
   const rows = await readPublicCases(env);
   return apiJson(request, env, {
     cases: rows.map((row, index) => ({ rank: index + 1, id: row.id, ...row.snapshot, dataScore: row.dataScore, outcomeScore: row.outcomeScore, rankScore: row.rankScore, updatedAt: row.updatedAt }))
+  });
+}
+
+async function publicCaseDetail(request, env, publicId) {
+  const row = await readPublicCase(env, publicId);
+  if (!row) {
+    return apiJson(request, env, { code: "PUBLIC_CASE_NOT_FOUND", message: "该匿名案例不存在，或已被下架" }, 404);
+  }
+  // This is deliberately the same anonymised snapshot used by the leaderboard.
+  // Never return source_case_id, token hashes, audio, raw transcripts or raw
+  // financial facts from a share URL.
+  return apiJson(request, env, {
+    id: row.id,
+    ...row.snapshot,
+    dataScore: row.dataScore,
+    outcomeScore: row.outcomeScore,
+    rankScore: row.rankScore,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt
   });
 }
 
@@ -2984,6 +3027,7 @@ export default {
       return leaderboard(request, env);
     }
     const publicMatch = url.pathname.match(/^\/api\/public-cases\/([^/]+)$/);
+    if (publicMatch && request.method === "GET") return publicCaseDetail(request, env, cleanId(publicMatch[1], 100));
     if (publicMatch && request.method === "POST") return updatePublicOutcome(request, env, cleanId(publicMatch[1], 100));
     if (publicMatch && request.method === "DELETE") return unpublishCase(request, env, cleanId(publicMatch[1], 100));
     if (url.pathname.startsWith("/api/cases")) {

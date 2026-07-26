@@ -21,7 +21,8 @@ for source_file in \
   test_production_asr.mjs \
   test_production_tts.mjs \
   stepfun-client.js \
-  agent-orchestrator.js
+  agent-orchestrator.js \
+  storevalidator-worker.mjs
 do
   node --check "$source_file"
 done
@@ -35,6 +36,7 @@ node test_dashscope_tts_client.mjs
 node test_stepfun_client.mjs
 node test_agent_orchestrator.js
 node test_worker.mjs
+node test_share_routes.mjs
 node test_site_report.mjs
 
 # The live ASR check uses the real paid/network API and is therefore opt-in.
