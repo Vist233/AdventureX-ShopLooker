@@ -154,15 +154,17 @@ flowchart TD
 - D1：`yongge-cases`，绑定名 `DB`
 - 已执行生产迁移：`migrations/0002_public_cases.sql`
 
-### StoreValidator 版式分支
+### 旧版绿色黑色界面
 
-- 分支：`storevalidator-receipt-review`
+- 分支：`legacy-shopvalidator-20260726`
 - 站点：`https://storevalidator.zhangyvjing.com`
-- 演示：`https://storevalidator.zhangyvjing.com/demo`
-- 配置：`wrangler.storevalidator.toml`
-- 发布：`deploy-storevalidator.sh`
+- 备用：`https://legacy-shopvalidator.zhangyvjing.com`
+- 配置：该分支中的 `wrangler.storevalidator.toml` 与 `wrangler.legacy.toml`
 
-这个站点只承载独立版本的静态前端（全站字体与第三步“事实核对单”的票据式布局）。正式入口与 `/demo` 是同一条 StoreValidator 分线的两个独立入口：Demo 自动加载山西运城小碗菜案例，进入第三步时同样显示票据式事实核对。它将同源 `/api/*` 请求转发到 `shopvalidator.zhangyvjing.com` 的现有决策后端，因此不会复制 D1 案卷、排行榜、队列、Durable Object 或模型密钥，也不会与正式 Worker 竞争队列消费。
+两个旧版站点只承载静态前端，并把同源 `/api/*` 请求转发到
+`shopvalidator.zhangyvjing.com` 的正式决策后端，不复制 D1、队列、
+Durable Object 或模型密钥。此前的 `storecalidator.zhangyvjing.com`
+预览 Worker 已于 2026-07-26 下架。
 
 常规发布：
 

@@ -36,4 +36,4 @@
 
 ---
 
-勇哥判店是经营决策筛查和实验设计工具，不替代会计、法律、劳动人事或投资意见。开发与部署说明见 [ARCHITECTURE.md](ARCHITECTURE.md) 与 `deploy.sh`。票据式界面分支使用独立静态前端站点 `https://storevalidator.zhangyvjing.com`，发布脚本为 `deploy-storevalidator.sh`。
+勇哥判店是经营决策筛查和实验设计工具，不替代会计、法律、劳动人事或投资意见。开发与部署说明见 [ARCHITECTURE.md](ARCHITECTURE.md) 与 `deploy.sh`。旧版绿色黑色界面保存在 `legacy-shopvalidator-20260726` 分支，并部署于 `https://storevalidator.zhangyvjing.com` 和 `https://legacy-shopvalidator.zhangyvjing.com`。

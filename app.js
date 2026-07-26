@@ -7,7 +7,6 @@ const FLOW_ORDER = ["location", "interview", "review", "result"];
 const LOCAL_VAD_SILENCE_MS = 350;
 const LOCAL_VAD_PRE_ROLL_MS = 280;
 const LOCAL_VAD_MAX_SEGMENT_MS = 20_000;
-const DEMO_ORIGIN = "https://storevalidator.zhangyvjing.com/demo";
 const PUBLIC_CASE_MATCH = window.location.pathname.match(/^\/case\/([A-Za-z0-9_-]+)\/?$/);
 const PUBLIC_CASE_ID = PUBLIC_CASE_MATCH?.[1] || null;
 const PUBLIC_CASE_MODE = Boolean(PUBLIC_CASE_ID);
