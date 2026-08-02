@@ -127,24 +127,53 @@ function closeDetail() {
   else dialog.removeAttribute("open");
 }
 
-closeButton.addEventListener("click", closeDetail);
-dialog.addEventListener("click", (event) => { if (event.target === dialog) closeDetail(); });
+// The list itself routes to a shareable case page. Keep these guards because a
+// partially cached ranking document should still render its cards even if an
+// older/newer markup version does not contain the optional detail dialog.
+closeButton?.addEventListener("click", closeDetail);
+dialog?.addEventListener("click", (event) => { if (event.target === dialog) closeDetail(); });
+
+function showLoadError(message) {
+  list.innerHTML = `<div class="ranking-load-error"><p>${escapeHtml(message)}</p><button type="button" class="secondary-button" id="retryLeaderboard">重新加载案例榜</button></div>`;
+  document.getElementById("retryLeaderboard")?.addEventListener("click", () => void loadLeaderboard());
+}
 
 async function loadLeaderboard() {
+  if (!list) return;
+  list.setAttribute("aria-busy", "true");
   try {
-    const response = await fetch("/api/leaderboard");
-    const data = await response.json();
-    if (!response.ok) throw new Error(data.message || "案例榜暂时不可用");
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => controller.abort(), 12_000);
+    let response;
+    try {
+      // Do not reuse an old API response after a case is published or removed.
+      response = await fetch("/api/leaderboard", {
+        cache: "no-store",
+        headers: { Accept: "application/json" },
+        signal: controller.signal
+      });
+    } finally {
+      window.clearTimeout(timeout);
+    }
+    const contentType = response.headers.get("content-type") || "";
+    const data = contentType.includes("application/json") ? await response.json() : null;
+    if (!response.ok) throw new Error(data?.message || "案例榜暂时不可用");
+    if (!data || !Array.isArray(data.cases)) throw new Error("案例榜数据格式异常，请重新加载");
     // Replacing the small loading line with a long list used to trigger browser
     // scroll anchoring: the page jumped past its title on the first load.
     // Preserve an intentional reader scroll, but keep a new visit at the top.
     const shouldStayAtTop = !initialCasesRendered && window.scrollY < 4;
-    currentCases = Array.isArray(data.cases) ? data.cases : [];
+    currentCases = data.cases.filter((item) => item && typeof item === "object");
     renderCards(currentCases);
     initialCasesRendered = true;
     if (shouldStayAtTop) requestAnimationFrame(() => window.scrollTo(0, 0));
   } catch (error) {
-    list.innerHTML = `<p>${escapeHtml(error.message)}</p>`;
+    const message = error?.name === "AbortError"
+      ? "案例榜加载超时，请检查网络后重新加载。"
+      : (error?.message || "案例榜暂时不可用，请重新加载。");
+    showLoadError(message);
+  } finally {
+    list.removeAttribute("aria-busy");
   }
 }
 

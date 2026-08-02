@@ -373,6 +373,22 @@ try {
   const asset = await request("/");
   assert.equal(await asset.text(), "asset");
 
+  // The public leaderboard is a fixed share URL. It must go through the
+  // current asset manifest rather than reusing a stale edge object from a
+  // previous deployment.
+  let rankingAssetUrl = "";
+  const rankingAsset = await worker.fetch(
+    new Request("https://example.com/ranking"),
+    { ASSETS: { fetch: async (assetRequest) => {
+      rankingAssetUrl = assetRequest.url;
+      return new Response("ranking asset");
+    } } }
+  );
+  assert.equal(await rankingAsset.text(), "ranking asset");
+  const rankingUrl = new URL(rankingAssetUrl);
+  assert.equal(rankingUrl.pathname, "/ranking");
+  assert.equal(rankingUrl.searchParams.get("__asset_version"), "20260802-rank-1");
+
   const createdResponse = await apiRequest("/api/cases", {
     method: "POST",
     body: { stage: "operating" }

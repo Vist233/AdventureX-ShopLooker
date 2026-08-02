@@ -44,6 +44,11 @@ export const ASR_SILENCE_DURATION_MS = 350;
 const SEARCH_TARGET = 2;
 const SEARCH_ROUNDS = 1;
 const SEARCH_CONCURRENCY = 1;
+// `/ranking` is a stable, widely shared URL. Static Assets can otherwise keep
+// an old edge object after a deploy, leaving old HTML paired with newer API
+// behaviour. The Worker route below asks the current asset manifest for a
+// versioned internal variant, without changing the public URL.
+const RANKING_ASSET_VERSION = "20260802-rank-1";
 const ACTION_RATE_LIMITS = {
   "create-case": { limit: 12, windowMs: 10 * 60 * 1000 },
   map: { limit: 60, windowMs: 60 * 1000 },
@@ -52,6 +57,13 @@ const ACTION_RATE_LIMITS = {
   analyze: { limit: 5, windowMs: 10 * 60 * 1000 },
   "asr-transcribe": { limit: 40, windowMs: 60 * 60 * 1000 }
 };
+
+function currentRankingAssetRequest(request) {
+  const url = new URL(request.url);
+  url.pathname = "/ranking";
+  url.searchParams.set("__asset_version", RANKING_ASSET_VERSION);
+  return new Request(url.toString(), request);
+}
 
 export class AgentGate {
   constructor(state, env) {
@@ -3044,6 +3056,9 @@ export default {
       return apiJson(request, env, { code: "NOT_FOUND", message: "接口不存在" }, 404);
     }
     if (!env.ASSETS) return new Response("Not found", { status: 404 });
+    if (request.method === "GET" && ["/ranking", "/ranking/", "/ranking.html"].includes(url.pathname)) {
+      return env.ASSETS.fetch(currentRankingAssetRequest(request));
+    }
     return env.ASSETS.fetch(request);
   }
 };
