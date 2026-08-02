@@ -381,10 +381,11 @@ try {
     new Request("https://example.com/ranking"),
     { ASSETS: { fetch: async (assetRequest) => {
       rankingAssetUrl = assetRequest.url;
-      return new Response("ranking asset");
+      return new Response("ranking asset", { headers: { "Content-Type": "application/octet-stream" } });
     } } }
   );
   assert.equal(await rankingAsset.text(), "ranking asset");
+  assert.equal(rankingAsset.headers.get("Content-Type"), "text/html; charset=utf-8");
   const rankingUrl = new URL(rankingAssetUrl);
   assert.equal(rankingUrl.pathname, "/ranking");
   assert.equal(rankingUrl.searchParams.get("__asset_version"), "20260802-rank-2");

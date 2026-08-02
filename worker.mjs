@@ -65,6 +65,16 @@ function currentRankingAssetRequest(request) {
   return new Request(url.toString(), request);
 }
 
+async function currentRankingAssetResponse(request, env) {
+  const asset = await env.ASSETS.fetch(currentRankingAssetRequest(request));
+  // `/ranking` deliberately has no file extension so that it is a clean share
+  // URL. Static Assets cannot infer a MIME type from that name, and browsers
+  // then decode its UTF-8 Chinese content as Latin-1. Set it explicitly here.
+  const headers = new Headers(asset.headers);
+  headers.set("Content-Type", "text/html; charset=utf-8");
+  return new Response(asset.body, { status: asset.status, statusText: asset.statusText, headers });
+}
+
 export class AgentGate {
   constructor(state, env) {
     this.state = state;
@@ -3056,8 +3066,8 @@ export default {
       return apiJson(request, env, { code: "NOT_FOUND", message: "接口不存在" }, 404);
     }
     if (!env.ASSETS) return new Response("Not found", { status: 404 });
-    if (request.method === "GET" && ["/ranking", "/ranking/", "/ranking.html"].includes(url.pathname)) {
-      return env.ASSETS.fetch(currentRankingAssetRequest(request));
+    if (["GET", "HEAD"].includes(request.method) && ["/ranking", "/ranking/", "/ranking.html"].includes(url.pathname)) {
+      return currentRankingAssetResponse(request, env);
     }
     return env.ASSETS.fetch(request);
   }
