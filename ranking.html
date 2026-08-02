@@ -1,10 +1,54 @@
 <!doctype html>
-<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>勇哥判店 · 店铺排行榜</title><link rel="icon" type="image/jpeg" href="/icon.jpeg"><link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700;800&family=Noto+Sans+SC:wght@400;500;600;700;800&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet"><link rel="stylesheet" href="/styles.css"></head>
-<body class="ranking-body"><header class="topbar"><a class="brand" href="/"><img class="brand-logo" src="/icon.jpeg" alt=""><span>勇哥判店</span></a><span class="topbar-proof">店铺排行榜</span></header><main class="ranking-main"><span class="section-kicker">已核验匿名案例 · 可单独分享</span><h1>别人是怎么<br><em>把店看清楚的。</em></h1><p>每张卡片都是一份可单独打开的匿名经营判断票：包含结论、关键依据与已核验方案，不含地址、录音、原始问诊或完整账目。</p><section id="rankingList" class="ranking-list" aria-live="polite"><p>正在载入案例…</p></section></main>
-<dialog class="case-detail-dialog" id="caseDetailDialog" aria-labelledby="caseDetailTitle">
-  <div class="case-detail-bar"><span class="section-kicker" id="caseDetailKicker">案例分析结果</span><button class="dialog-close" id="closeCaseDetail" type="button" aria-label="关闭案例详情">×</button></div>
-  <div class="case-detail-body" id="caseDetailBody"></div>
-</dialog>
-<!-- Keep the ranking client versioned: this page is frequently opened from
-     shared links, and a stale script must never be paired with a new page. -->
-<script src="/ranking.js?v=20260802-rank-1"></script></body></html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>勇哥判店 · 公开案例档案</title>
+  <link rel="icon" type="image/jpeg" href="/icon.jpeg">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700;800&family=Noto+Sans+SC:wght@400;500;600;700;800&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body class="ranking-body">
+  <header class="topbar">
+    <a class="brand" href="/"><img class="brand-logo" src="/icon.jpeg" alt=""><span>勇哥判店</span></a>
+    <span class="topbar-proof">公开案例档案</span>
+  </header>
+
+  <main class="ranking-main">
+    <div class="ranking-hero">
+      <span class="section-kicker">已核验匿名案例 · 可单独分享</span>
+      <h1>不是比谁最赚钱。<br><em>是看谁把店看清。</em></h1>
+      <p>每份记录只保留结论、关键经营信号和已核验方案。排序依据是资料完整度与后续回填效果，不代表门店收入、规模或经营优劣。</p>
+    </div>
+
+    <section class="ranking-dashboard" aria-label="案例榜说明">
+      <div class="ranking-stat"><b id="caseCount">—</b><span>已公开案例</span></div>
+      <div class="ranking-stat"><b id="verifiedPlanCount">—</b><span>已核验方案</span></div>
+      <div class="ranking-rule"><span>排序口径</span><b>70% 资料完整度 + 30% 后续回填效果</b></div>
+    </section>
+
+    <section class="ranking-controls" aria-label="筛选公开案例">
+      <div>
+        <span class="section-kicker">按经营阶段查看</span>
+        <div class="ranking-filters" id="stageFilters" role="group" aria-label="经营阶段筛选">
+          <button type="button" class="is-active" data-stage-filter="all">全部</button>
+          <button type="button" data-stage-filter="operating">已营业</button>
+          <button type="button" data-stage-filter="preopen">准备开店</button>
+          <button type="button" data-stage-filter="growth">增长中</button>
+        </div>
+      </div>
+      <p id="rankingCount" aria-live="polite">正在载入案例…</p>
+    </section>
+
+    <section id="rankingList" class="ranking-list" aria-live="polite" aria-busy="true">
+      <p>正在载入案例…</p>
+    </section>
+  </main>
+
+  <!-- Keep the ranking client versioned: shared links should never pair an
+       old client with a newer page or API response. -->
+  <script src="/ranking.js?v=20260802-rank-2"></script>
+</body>
+</html>

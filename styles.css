@@ -83,11 +83,25 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, summary:focus
 .topbar-ranking:hover { color: var(--paper); background: var(--ink); }
 .topbar-ranking + .topbar-proof { margin-left: 20px; }
 
-.ranking-main { max-width: 800px; min-height: calc(100vh - 64px); margin: 0 auto; padding: 80px 24px; }
-.ranking-main h1 { margin: 15px 0; font-size: clamp(46px, 7vw, 82px); line-height: .98; letter-spacing: -.07em; }
+.ranking-main { max-width: 980px; min-height: calc(100vh - 64px); margin: 0 auto; padding: clamp(44px, 7vw, 86px) 24px 88px; }
+.ranking-hero { max-width: 780px; }
+.ranking-main h1 { margin: 15px 0 18px; font-size: clamp(46px, 7vw, 82px); line-height: .98; letter-spacing: -.07em; }
 .ranking-main h1 em { padding: 0 .08em; color: var(--paper); background: var(--ink); font-style: normal; box-decoration-break: clone; -webkit-box-decoration-break: clone; }
-.ranking-main > p { max-width: 620px; color: var(--muted); line-height: 1.7; }
-.ranking-list { margin-top: 44px; display: grid; gap: 14px; }
+.ranking-hero > p { max-width: 680px; margin: 0; color: var(--muted); line-height: 1.75; }
+.ranking-dashboard { margin-top: 42px; display: grid; grid-template-columns: 144px 144px minmax(240px, 1fr); border-top: 1px solid var(--ink); border-bottom: 1px solid var(--ink); }
+.ranking-stat, .ranking-rule { min-height: 98px; padding: 16px 18px; display: flex; flex-direction: column; justify-content: space-between; }
+.ranking-stat { border-right: 1px solid var(--ink); }
+.ranking-stat b { font-size: 35px; line-height: 1; letter-spacing: -.055em; }
+.ranking-stat span, .ranking-rule > span { color: var(--muted); font: 700 10px/1.35 ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: .08em; text-transform: uppercase; }
+.ranking-rule { color: var(--paper); background: var(--ink); }
+.ranking-rule > span { color: var(--paper-faint); }
+.ranking-rule b { max-width: 390px; font-size: 14px; line-height: 1.45; }
+.ranking-controls { margin-top: 38px; padding-bottom: 15px; display: flex; align-items: end; justify-content: space-between; gap: 24px; border-bottom: 1px dashed var(--ink); }
+.ranking-controls > p { margin: 0 0 5px; color: var(--muted); font-size: 12px; white-space: nowrap; }
+.ranking-filters { margin-top: 10px; display: flex; flex-wrap: wrap; gap: 7px; }
+.ranking-filters button { min-height: 31px; padding: 5px 10px; color: var(--muted); background: transparent; border: 1px solid var(--line-soft); cursor: pointer; font-size: 12px; }
+.ranking-filters button:hover, .ranking-filters button.is-active { color: var(--paper); background: var(--ink); border-color: var(--ink); }
+.ranking-list { margin-top: 18px; display: grid; gap: 11px; }
 .ranking-card { padding: 24px; background: var(--white); border: 1px solid var(--ink); }
 .ranking-card h2 { margin: 10px 0 0; font-size: 32px; }
 .ranking-card > p { color: var(--muted); font-size: 12px; }
@@ -675,20 +689,24 @@ footer > span { text-align: right; }
 
 /* The existing public archive has a richer card DOM than the older branch;
    normalize it to the reference branch's receipt list. */
-.rank-card { padding: 24px; display: flex; flex-direction: column; gap: 14px; background: var(--white); border: 1px solid var(--ink); cursor: pointer; }
+.rank-card { padding: 20px 22px 16px; display: block; color: var(--ink); background: var(--white); border: 1px solid var(--ink); text-decoration: none; }
 .rank-card:hover, .rank-card:focus-visible { color: var(--paper); background: var(--ink); outline: none; }
-.rank-card-top { display: flex; align-items: center; justify-content: space-between; gap: 14px; }
-.rank-loc { font-weight: 850; font-size: 15px; letter-spacing: -.01em; }
+.rank-card-header { display: grid; grid-template-columns: 46px minmax(0, 1fr) auto; gap: 12px; align-items: start; }
+.rank-number { padding-top: 1px; color: var(--muted); font: 800 13px/1 ui-monospace, SFMono-Regular, Menlo, monospace; }
+.rank-card-tags { min-width: 0; display: flex; flex-wrap: wrap; gap: 6px; }
+.rank-card-tags span { padding: 3px 6px; border: 1px dashed currentColor; font-size: 11px; line-height: 1.25; }
 .rank-badge { flex: none; padding: 5px 8px; color: var(--ink); background: var(--container); border: 1px solid currentColor; font: 800 11px/1 ui-monospace, SFMono-Regular, Menlo, monospace; white-space: nowrap; }
-.rank-status { margin: 0; font-size: 18px; line-height: 1.5; letter-spacing: -.01em; }
-.rank-card-foot { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding-top: 12px; border-top: 1px dashed currentColor; }
-.rank-hint { color: inherit; opacity: .68; font-size: 11px; }
-.rank-detail-link { color: inherit; font-weight: 850; font-size: 13px; white-space: nowrap; }
-.case-detail-dialog { width: min(860px, calc(100vw - 30px)); max-height: min(90vh, calc(100vh - 40px)); padding: 0; overflow: hidden; }
-.case-detail-dialog::backdrop { background: rgba(26,29,26,.72); }
-.case-detail-bar { position: sticky; top: 0; z-index: 2; padding: 20px 27px; display: flex; align-items: center; justify-content: space-between; gap: 18px; color: var(--paper); background: var(--ink); }
-.case-detail-bar .section-kicker { color: var(--paper); }
-.case-detail-body { max-height: calc(90vh - 66px); padding: 24px 27px 34px; overflow: auto; }
+.rank-status { max-width: 720px; margin: 17px 0 16px 58px; font-size: clamp(17px, 2.1vw, 21px); font-weight: 780; line-height: 1.4; letter-spacing: -.025em; }
+.rank-card-evidence { margin-left: 58px; display: flex; flex-wrap: wrap; gap: 7px; }
+.rank-card-evidence span { padding: 5px 7px; color: var(--muted); background: var(--container); border: 1px dashed var(--line-soft); font-size: 11px; }
+.rank-card-foot { margin-top: 16px; padding-top: 12px; display: flex; align-items: center; justify-content: space-between; color: inherit; border-top: 1px dashed currentColor; font-size: 12px; font-weight: 800; }
+.rank-card-foot b { font-size: 18px; line-height: .8; }
+.rank-card:hover .rank-number, .rank-card:hover .rank-card-evidence span, .rank-card:focus-visible .rank-number, .rank-card:focus-visible .rank-card-evidence span { color: var(--paper-dim); }
+.rank-card:hover .rank-card-evidence span, .rank-card:focus-visible .rank-card-evidence span { background: transparent; border-color: var(--paper-line); }
+.rank-card:hover .rank-badge, .rank-card:focus-visible .rank-badge { color: var(--ink); background: var(--paper); }
+.ranking-empty, .ranking-load-error { padding: 28px 24px; border: 1px dashed var(--ink); background: var(--container); }
+.ranking-empty b, .ranking-load-error b { display: block; font-size: 17px; }
+.ranking-empty p, .ranking-load-error p { max-width: 560px; margin: 9px 0 17px; color: var(--muted); line-height: 1.7; }
 .result-leaderboard { margin-top: 56px; padding-bottom: 64px; }
 .result-leaderboard-intro { padding: 24px 0 16px; border-bottom: 1px dashed var(--ink); }
 .result-leaderboard-intro h2 { margin: 9px 0 8px; font-size: clamp(24px, 3.4vw, 40px); letter-spacing: -.045em; }
@@ -704,4 +722,22 @@ footer > span { text-align: right; }
   .preopen-signal-row > div:last-child { border-bottom: 0; }
   .preopen-ranking-explanation { grid-template-columns: 1fr; }
   .preopen-ranking-explanation > small { grid-column: auto; }
+  .ranking-dashboard { grid-template-columns: 1fr 1fr; }
+  .ranking-rule { grid-column: 1 / -1; min-height: 82px; border-top: 1px solid var(--ink); }
+  .ranking-controls { align-items: flex-start; flex-direction: column; gap: 13px; }
+  .ranking-controls > p { margin: 0; }
+}
+
+@media (max-width: 520px) {
+  .ranking-main { padding-right: 16px; padding-left: 16px; }
+  .ranking-main h1 { font-size: clamp(42px, 13vw, 62px); }
+  .ranking-stat, .ranking-rule { padding: 14px; }
+  .ranking-stat b { font-size: 30px; }
+  .rank-card { padding: 17px 15px 14px; }
+  .rank-card-header { grid-template-columns: 35px minmax(0, 1fr); gap: 8px; }
+  .rank-badge { grid-column: 2; justify-self: start; }
+  .rank-status, .rank-card-evidence { margin-left: 43px; }
+  .rank-status { margin-top: 14px; margin-bottom: 13px; font-size: 17px; }
+  .rank-card-evidence { gap: 5px; }
+  .rank-card-evidence span { padding: 4px 5px; font-size: 10px; }
 }

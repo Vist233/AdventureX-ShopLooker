@@ -48,7 +48,7 @@ const SEARCH_CONCURRENCY = 1;
 // an old edge object after a deploy, leaving old HTML paired with newer API
 // behaviour. The Worker route below asks the current asset manifest for a
 // versioned internal variant, without changing the public URL.
-const RANKING_ASSET_VERSION = "20260802-rank-1";
+const RANKING_ASSET_VERSION = "20260802-rank-2";
 const ACTION_RATE_LIMITS = {
   "create-case": { limit: 12, windowMs: 10 * 60 * 1000 },
   map: { limit: 60, windowMs: 60 * 1000 },

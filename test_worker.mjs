@@ -387,7 +387,7 @@ try {
   assert.equal(await rankingAsset.text(), "ranking asset");
   const rankingUrl = new URL(rankingAssetUrl);
   assert.equal(rankingUrl.pathname, "/ranking");
-  assert.equal(rankingUrl.searchParams.get("__asset_version"), "20260802-rank-1");
+  assert.equal(rankingUrl.searchParams.get("__asset_version"), "20260802-rank-2");
 
   const createdResponse = await apiRequest("/api/cases", {
     method: "POST",
