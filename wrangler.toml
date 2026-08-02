@@ -1,4 +1,4 @@
-name = "yongge"
+name = "shopvalidator"
 compatibility_date = "2026-07-23"
 workers_dev = false
 main = "worker.mjs"

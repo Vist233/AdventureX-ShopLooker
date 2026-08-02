@@ -8,7 +8,7 @@
 
 ## 当前状态
 
-Cloudflare Worker 名称为 `yongge`，技术栈为 Worker + Static Assets + D1 + Queue + Durable Object。代码以 `main` 为准，主站与演示站均正常。
+Cloudflare Worker 名称为 `shopvalidator`，技术栈为 Worker + Static Assets + D1 + Queue + Durable Object。代码以 `main` 为准，主站与演示站均正常。
 
 2026-07-25 本次修复：完整分析已取消按日、按 IP 的次数限制；Worker 不再调用 `consumeDailyAnalysisBudget()`。选址报告任意失败都会进入可返回的失败卡，不会错误显示 100% 后留在空白结果页。已补浏览器回归覆盖此失败状态；生产临时案卷实测在旧 IP 已触及原限制的情况下仍成功完成一份报告，随后已删除测试案卷。
 
