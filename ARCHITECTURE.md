@@ -303,20 +303,20 @@ POST   /api/tts
 
 |层次|入口|覆盖|
 |---|---|---|
-|事实档案|`node test_fact_store.js`|未知、零值、范围、周期、毛利转换、版本历史|
-|确定性引擎|`node test_decision_engine.js`|决策闸门、保守计算、关键事实不足|
-|问诊策略|`node test_interview_policy.js`|阶段必问字段、两次拆问、30 轮上限、短问题|
-|服务端适配|`node test_server_decision_adapter.mjs`|忽略客户端计算、服务端重算与完整性判定|
-|StepFun 文本客户端|`node test_stepfun_client.mjs`|结构化输出与重试|
-|DashScope ASR 客户端|`node test_dashscope_asr_client.mjs`|鉴权、WAV Data URI、请求格式与响应解析|
-|DashScope TTS 客户端|`node test_dashscope_tts_client.mjs`|指令、Serena 音色、鉴权与音频解码|
-|Agent 搜索|`node test_agent_orchestrator.js`|3 候选、每个双核验、并发不超过 3、硬上限 3|
-|Worker|`node test_worker.mjs`|地图、案卷、鉴权、单轮 WAV ASR、AgentGate|
-|浏览器 E2E|`python test_location_e2e.py`|位置、一次启动、降级、全量查证、一次提交、数字口径与选址三品类排序页|
-|真实 StepFun 文本|`node test_stepfun_live.mjs`|真实 JSON 文本调用|
-|真实腾讯地图|`node test_worker_live.mjs`|真实地址与周边接口|
-|生产 ASR 冒烟|`node test_production_asr.mjs`|真实 Worker Secret、二进制 WAV 上传与 Fun-ASR-Flash 返回|
-|生产全链路|`python test_production_e2e.py --confirm-paid-analysis`|生产静态页、地图、TTS、事实纠偏、付费 3 方案搜索、方案执行与删除|
+|事实档案|`node tests/test_fact_store.js`|未知、零值、范围、周期、毛利转换、版本历史|
+|确定性引擎|`node tests/test_decision_engine.js`|决策闸门、保守计算、关键事实不足|
+|问诊策略|`node tests/test_interview_policy.js`|阶段必问字段、两次拆问、12 问上限、短问题|
+|服务端适配|`node tests/test_server_decision_adapter.mjs`|忽略客户端计算、服务端重算与完整性判定|
+|StepFun 文本客户端|`node tests/test_stepfun_client.mjs`|结构化输出与重试|
+|DashScope ASR 客户端|`node tests/test_dashscope_asr_client.mjs`|鉴权、WAV Data URI、请求格式与响应解析|
+|DashScope TTS 客户端|`node tests/test_dashscope_tts_client.mjs`|指令、Serena 音色、鉴权与音频解码|
+|Agent 搜索|`node tests/test_agent_orchestrator.js`|3 候选、每个双核验、并发不超过 3、硬上限 3|
+|Worker|`node tests/test_worker.mjs`|地图、案卷、鉴权、单轮 WAV ASR、AgentGate|
+|浏览器 E2E|`python tests/test_location_e2e.py`|位置、一次启动、降级、全量查证、一次提交、数字口径与选址三品类排序页|
+|真实 StepFun 文本|`node tests/test_stepfun_live.mjs`|真实 JSON 文本调用|
+|真实腾讯地图|`node tests/test_worker_live.mjs`|真实地址与周边接口|
+|生产 ASR 冒烟|`node tests/test_production_asr.mjs`|真实 Worker Secret、二进制 WAV 上传与 Fun-ASR-Flash 返回|
+|生产全链路|`python tests/test_production_e2e.py --confirm-paid-analysis`|生产静态页、地图、TTS、事实纠偏、付费 3 方案搜索、方案执行与删除|
 
 所有 Python 命令在本工作区使用 `pyenv shell Agent`。
 
@@ -326,6 +326,6 @@ POST   /api/tts
 
 首次部署必须先创建 D1、生产 Queue、DLQ 和 Durable Object 迁移所需的 Worker 绑定，再应用 `schema.sql`、写入 Worker Secrets、执行 Dry Run，最后部署。日常部署由 `./deploy.sh` 运行静态检查、单元测试、公开资产构建、Wrangler Dry Run 和正式发布。
 
-`build_site.py` 只把 `index.html`、样式、前端事实/决策代码、应用代码和聚合后的公开数据复制到 `dist/`。研究文档、测试、原始字幕、分析代码、数据库内容和密钥不会作为静态资产公开。
+`scripts/build_site.py` 只把 `src/site/` 中的页面资源、`src/` 中的前端事实/决策代码、应用代码和聚合后的公开数据复制到 `dist/`。研究文档、测试、原始字幕、分析代码、数据库内容和密钥不会作为静态资产公开。
 
 具体命令见 [README.md](README.md)。研究与产品判断依据见 [FIRST_PRINCIPLES_REPORT.md](FIRST_PRINCIPLES_REPORT.md)、[RESEARCH.md](RESEARCH.md) 和 [YONGGE_DECISION_TREE.md](YONGGE_DECISION_TREE.md)。

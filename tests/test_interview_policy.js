@@ -1,5 +1,5 @@
 const assert = require("node:assert/strict");
-const { MAX_TURNS, MAX_ATTEMPTS_PER_FIELD, getRequiredFields, getAllowedFields, evaluateInterviewCompleteness, sanitizeAgentNextQuestion } = require("./interview-policy.js");
+const { MAX_TURNS, MAX_ATTEMPTS_PER_FIELD, getRequiredFields, getAllowedFields, evaluateInterviewCompleteness, sanitizeAgentNextQuestion } = require("../src/interview-policy.js");
 
 assert.equal(MAX_TURNS, 12);
 assert.equal(MAX_ATTEMPTS_PER_FIELD, 1);

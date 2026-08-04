@@ -474,14 +474,14 @@ def refresh_research_markdown(report: dict, path: Path) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    here = Path(__file__).resolve().parent
+    project_root = Path(__file__).resolve().parents[1]
     parser.add_argument(
         "--archive",
         type=Path,
-        default=here.parent / "bilibili-ai-subtitles",
+        default=project_root / "bilibili-ai-subtitles",
         help="包含 manifest.jsonl 和 srt/ 的字幕归档目录",
     )
-    parser.add_argument("--output", type=Path, default=here / "data")
+    parser.add_argument("--output", type=Path, default=project_root / "data")
     parser.add_argument(
         "--expected-total",
         type=int,
@@ -669,7 +669,7 @@ def main() -> None:
     args.output.mkdir(parents=True, exist_ok=True)
     report_path = args.output / "corpus_analysis.json"
     report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
-    refresh_research_markdown(report, here / "RESEARCH.md")
+    refresh_research_markdown(report, project_root / "RESEARCH.md")
 
     with (args.output / "cases.csv").open("w", encoding="utf-8-sig", newline="") as handle:
         fieldnames = [

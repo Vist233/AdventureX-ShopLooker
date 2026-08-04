@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import {
   DashScopeAsrClient,
   extractDashScopeTranscript
-} from "./dashscope-asr-client.js";
+} from "../src/dashscope-asr-client.js";
 
 assert.equal(
   extractDashScopeTranscript({ output: { text: "Hello World，这里是阿里巴巴语音实验室。" } }),

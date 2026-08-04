@@ -4,19 +4,22 @@
 from __future__ import annotations
 
 import mimetypes
+import sys
 from pathlib import Path
 
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(PROJECT_ROOT / "scripts"))
 import build_site
 
 
-ROOT = Path(__file__).resolve().parent
+ROOT = PROJECT_ROOT
 
 
 def main() -> None:
     build_site.main()
     failures: list[str] = []
 
-    source_icon = ROOT / "icon.jpeg"
+    source_icon = ROOT / "src" / "site" / "icon.jpeg"
     built_icon = ROOT / "dist" / "icon.jpeg"
     if not built_icon.exists():
         failures.append("dist/icon.jpeg is missing")

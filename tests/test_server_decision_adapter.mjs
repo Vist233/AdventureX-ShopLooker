@@ -5,7 +5,7 @@ import {
   evaluateInterviewCompleteness,
   getRequiredInterviewFields,
   sanitizeAgentNextQuestion
-} from "./server-decision-adapter.mjs";
+} from "../src/server-decision-adapter.mjs";
 
 const serverCase = {
   stage: "operating",

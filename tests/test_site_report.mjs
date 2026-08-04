@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { runSiteReport, fallbackSiteReport } from "./worker.mjs";
+import { runSiteReport, fallbackSiteReport } from "../src/worker.mjs";
 
 // Passing an env without STEPFUN_API_KEY makes createTextLlm() return null, so
 // runSiteReport falls back to the deterministic rule-based report. That keeps

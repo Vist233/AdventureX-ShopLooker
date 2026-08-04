@@ -9,7 +9,7 @@ import worker, {
   publicDataScore,
   publicRunSnapshot,
   releaseAnalysisRoundClaim
-} from "./worker.mjs";
+} from "../src/worker.mjs";
 
 const originalFetch = globalThis.fetch;
 const upstreamCalls = [];

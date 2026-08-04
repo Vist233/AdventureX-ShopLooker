@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 
-const app = readFileSync(new URL("./app.js", import.meta.url), "utf8");
+const app = readFileSync(new URL("../src/app.js", import.meta.url), "utf8");
 const demo = app.match(/const DEMO_CASE = \{[\s\S]*?\r?\n\};\r?\n\r?\nfunction escapeHtml/);
 
 assert.ok(demo, "DEMO_CASE must remain statically inspectable");

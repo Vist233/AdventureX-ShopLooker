@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { DashScopeTtsClient, dashScopeTtsDefaults } from "./dashscope-tts-client.js";
+import { DashScopeTtsClient, dashScopeTtsDefaults } from "../src/dashscope-tts-client.js";
 
 let captured = null;
 const client = new DashScopeTtsClient({ DASHSCOPE_API_KEY: "server-secret" }, {

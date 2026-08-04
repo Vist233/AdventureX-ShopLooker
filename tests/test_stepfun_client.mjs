@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { StepFunClient } from "./stepfun-client.js";
+import { StepFunClient } from "../src/stepfun-client.js";
 
 function mockClient(responses, calls = []) {
   return new StepFunClient(

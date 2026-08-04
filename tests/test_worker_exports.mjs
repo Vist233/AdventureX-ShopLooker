@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import * as workerModule from "./worker.mjs";
+import * as workerModule from "../src/worker.mjs";
 
 for (const [name, value] of Object.entries(workerModule)) {
   if (name === "default") continue;

@@ -22,8 +22,8 @@ import hashlib
 import json
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent
-OUT = ROOT / "tmp" / "seed_public_cases.sql"
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+OUT = PROJECT_ROOT / "tmp" / "seed_public_cases.sql"
 
 
 def token_hash(seed_id: str) -> str:

@@ -5,7 +5,7 @@ import {
   runAgentRound,
   runAgentSearch,
   orchestratorInternals
-} from "./agent-orchestrator.js";
+} from "../src/agent-orchestrator.js";
 
 const context = {
   facts: {

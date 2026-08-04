@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { StepFunClient } from "./stepfun-client.js";
+import { StepFunClient } from "../src/stepfun-client.js";
 
 const apiKey = process.env.STEPFUN_API_KEY || process.env.step_API_KEY;
 if (!apiKey) throw new Error("请先设置 STEPFUN_API_KEY 或 step_API_KEY");

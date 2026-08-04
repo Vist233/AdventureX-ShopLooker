@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 
-const css = readFileSync(new URL("./styles.css", import.meta.url), "utf8");
-const index = readFileSync(new URL("./index.html", import.meta.url), "utf8");
+const css = readFileSync(new URL("../src/site/styles.css", import.meta.url), "utf8");
+const index = readFileSync(new URL("../src/site/index.html", import.meta.url), "utf8");
 
 // Keep StoreValidator on the Thermal Brutalism reference system. The test
 // checks the frame grammar instead of freezing unrelated product copy.

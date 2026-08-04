@@ -149,7 +149,7 @@ flowchart TD
 ## 部署与数据库
 
 - 配置：`wrangler.toml`
-- 构建：`build_site.py`
+- 构建：`scripts/build_site.py`
 - 发布：`deploy.sh`
 - D1：`yongge-cases`，绑定名 `DB`
 - 已执行生产迁移：`migrations/0002_public_cases.sql`
@@ -179,16 +179,16 @@ cd output/adventurex-restaurant-decision
 
 ## 已完成验证
 
-- `test_fact_store.js`
-- `test_decision_engine.js`
-- `test_interview_policy.js`
-- `test_server_decision_adapter.mjs`
-- `test_dashscope_asr_client.mjs`
-- `test_dashscope_tts_client.mjs`
-- `test_stepfun_client.mjs`
-- `test_agent_orchestrator.js`
-- `test_worker.mjs`（含：模型故障不重复出题回归、阶段落库回归）
-- `test_site_report.mjs`（地图选址报告：recommend/feasibility 分流、GO/TEST/STOP 判定规则、推荐卡理由非空且互不相同；已纳入 `deploy.sh` 门禁）
+- `tests/test_fact_store.js`
+- `tests/test_decision_engine.js`
+- `tests/test_interview_policy.js`
+- `tests/test_server_decision_adapter.mjs`
+- `tests/test_dashscope_asr_client.mjs`
+- `tests/test_dashscope_tts_client.mjs`
+- `tests/test_stepfun_client.mjs`
+- `tests/test_agent_orchestrator.js`
+- `tests/test_worker.mjs`（含：模型故障不重复出题回归、阶段落库回归）
+- `tests/test_site_report.mjs`（地图选址报告：recommend/feasibility 分流、GO/TEST/STOP 判定规则、推荐卡理由非空且互不相同；已纳入 `deploy.sh` 门禁）
 - 全部 `node --check` 与 node 测试文件通过；`./deploy.sh` 一次部署成功。
 - 生产 `GET /api/leaderboard` 返回 `{"cases":[]}`（空榜正常）
 - 生产文字问诊：数字入档、问诊进度为 `1 / 6 / 12`、问题不重复。
@@ -214,7 +214,7 @@ cd output/adventurex-restaurant-decision
 
 - `/api/leaderboard` 404：通常是静态文件上传成功但 Worker 未切换；重新 `wrangler deploy --config wrangler.toml`，再 curl 验证。
 - 页面显示数字但结果未采纳：检查 `/turns` 响应的 `extractedFacts`。应含当前字段、归一化数值、周期与状态；检查 `deterministicAnswerFact()` 与 `canonicalInterviewFacts()`。
-- 问题重复：已在服务端根因修复——提交后统一用最新状态重算下一题；若再现，检查 `worker.mjs` 提交后是否调用 `working.currentQuestion = nextQuestion(working)`，以及前端是否重用 `turnId`。
+- 问题重复：已在服务端根因修复——提交后统一用最新状态重算下一题；若再现，检查 `src/worker.mjs` 提交后是否调用 `working.currentQuestion = nextQuestion(working)`，以及前端是否重用 `turnId`。
 - 进度条卡在 `queued` 或来回跳：检查 `createRunProgressSink` 是否在两处 `onProgress`（`runAnalysis` 与 `processAnalysisQueueMessage`）都接入；前端应只走 `renderRunProgress`，不得再有定时 setInterval 表演。
 - 选址报告报 `signal is aborted without reason`：客户端 40 秒超时先于服务端返回触发；确认服务端 22 秒 LLM 竞速兜底仍在（`runSiteReport` 内 `Promise.race`）。
 - 选址报告 `UNIQUE constraint failed: analysis_runs.case_id, analysis_runs.case_version`：说明 site-map 分支没有复用既有 run id；检查 `startAnalysis` 中 `findRunForCaseVersion` 的复用逻辑。

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { getMapContext } from "./worker.mjs";
+import { getMapContext } from "../src/worker.mjs";
 
 const key = process.env.TENCENT_MAP_KEY;
 if (!key) {

@@ -9,6 +9,8 @@ without sending audio or using production credentials.
 from __future__ import annotations
 
 import json
+import os
+import subprocess
 import threading
 from functools import partial
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
@@ -18,9 +20,18 @@ from typing import Any
 from playwright.sync_api import Page, Route, expect, sync_playwright
 
 
-ROOT = Path(__file__).resolve().parent
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+ROOT = PROJECT_ROOT / "dist"
 ADDRESS = "上海市黄浦区南京东路300号"
 API_COUNTS = {"turns": 0, "review": 0, "asr": 0}
+
+
+if not ROOT.exists():
+    subprocess.run(
+        ["python", str(PROJECT_ROOT / "scripts" / "build_site.py")],
+        check=True,
+        cwd=PROJECT_ROOT,
+    )
 
 
 class QuietHandler(SimpleHTTPRequestHandler):
@@ -594,7 +605,11 @@ def test_missing_public_case_stays_at_top(browser, base_url: str) -> None:
 
 def main() -> None:
     with LocalSite() as site, sync_playwright() as playwright:
-        browser = playwright.chromium.launch(headless=True)
+        launch_options: dict[str, Any] = {"headless": True}
+        executable_path = os.environ.get("PLAYWRIGHT_EXECUTABLE_PATH")
+        if executable_path:
+            launch_options["executable_path"] = executable_path
+        browser = playwright.chromium.launch(**launch_options)
         try:
             test_landing_and_workspace_are_separate(browser, site.url)
             test_location_and_text_fallback(browser, site.url)

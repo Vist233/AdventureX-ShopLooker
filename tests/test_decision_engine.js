@@ -3,7 +3,7 @@ const {
   assess,
   assessServerCase,
   toServerDeterministicResult
-} = require("./decision-engine.js");
+} = require("../src/decision-engine.js");
 
 const common = {
   category: "快餐",

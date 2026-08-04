@@ -8,45 +8,42 @@ eval "$(pyenv init - zsh)"
 pyenv shell Agent
 
 for source_file in \
-  app.js \
-  ranking.js \
-  decision-engine.js \
-  fact-store.js \
-  interview-policy.js \
-  server-decision-adapter.mjs \
-  worker.mjs \
-  dashscope-asr-client.js \
-  dashscope-tts-client.js \
-  test_dashscope_tts_live.mjs \
-  test_production_asr.mjs \
-  test_production_tts.mjs \
-  stepfun-client.js \
-  agent-orchestrator.js
+  src/app.js \
+  src/site/ranking.js \
+  src/decision-engine.js \
+  src/fact-store.js \
+  src/interview-policy.js \
+  src/server-decision-adapter.mjs \
+  src/worker.mjs \
+  src/dashscope-asr-client.js \
+  src/dashscope-tts-client.js \
+  src/stepfun-client.js \
+  src/agent-orchestrator.js
 do
   node --check "$source_file"
 done
 
-node test_fact_store.js
-node test_decision_engine.js
-node test_interview_policy.js
-node test_server_decision_adapter.mjs
-node test_dashscope_asr_client.mjs
-node test_dashscope_tts_client.mjs
-node test_stepfun_client.mjs
-node test_agent_orchestrator.js
-node test_worker.mjs
-node test_site_report.mjs
+node tests/test_fact_store.js
+node tests/test_decision_engine.js
+node tests/test_interview_policy.js
+node tests/test_server_decision_adapter.mjs
+node tests/test_dashscope_asr_client.mjs
+node tests/test_dashscope_tts_client.mjs
+node tests/test_stepfun_client.mjs
+node tests/test_agent_orchestrator.js
+node tests/test_worker.mjs
+node tests/test_site_report.mjs
 
 # The live ASR check uses the real paid/network API and is therefore opt-in.
 # Run with RUN_DASHSCOPE_LIVE_ASR=1 when validating credentials or the model.
 if [[ "${RUN_DASHSCOPE_LIVE_ASR:-0}" == "1" ]]; then
-  python test_dashscope_asr_live.py
+  python tests/test_dashscope_asr_live.py
 fi
 if [[ "${RUN_DASHSCOPE_LIVE_TTS:-0}" == "1" ]]; then
-  node test_dashscope_tts_live.mjs
+  node tests/test_dashscope_tts_live.mjs
 fi
 
-python build_site.py
+python scripts/build_site.py
 
 # Cloudflare is occasionally unreachable directly from this workspace. Prefer
 # the existing local proxy and retry directly if the proxy is unavailable.

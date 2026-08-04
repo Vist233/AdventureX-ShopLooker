@@ -5,8 +5,8 @@ from pathlib import Path
 import re
 
 
-ROOT = Path(__file__).resolve().parent
-CSS = (ROOT / "styles.css").read_text(encoding="utf-8")
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+CSS = (PROJECT_ROOT / "src" / "site" / "styles.css").read_text(encoding="utf-8")
 
 EXPECTED = {
     "--ink": "#18130E",

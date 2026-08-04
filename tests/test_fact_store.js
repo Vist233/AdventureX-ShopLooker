@@ -10,7 +10,7 @@ const {
   toDecisionBoundInputsFromServerFacts,
   grossMarginToVariableCostRate,
   variableCostRateToGrossMargin
-} = require("./fact-store.js");
+} = require("../src/fact-store.js");
 
 const zero = normalizeFact({
   field: "debt",

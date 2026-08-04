@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { DashScopeTtsClient } from "./dashscope-tts-client.js";
+import { DashScopeTtsClient } from "../src/dashscope-tts-client.js";
 
 const client = new DashScopeTtsClient({ DASHSCOPE_API_KEY: process.env.DASHSCOPE_API_KEY });
 const audio = await client.synthesize("你好，欢迎使用店判。", { timeoutMs: 30_000 });

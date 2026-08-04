@@ -6,10 +6,12 @@ import re
 import struct
 
 
-ROOT = Path(__file__).resolve().parent
-CSS = (ROOT / "styles.css").read_text(encoding="utf-8")
-HTML = (ROOT / "index.html").read_text(encoding="utf-8")
-APP = (ROOT / "app.js").read_text(encoding="utf-8")
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+SITE = PROJECT_ROOT / "src" / "site"
+RUNTIME = PROJECT_ROOT / "src"
+CSS = (SITE / "styles.css").read_text(encoding="utf-8")
+HTML = (SITE / "index.html").read_text(encoding="utf-8")
+APP = (RUNTIME / "app.js").read_text(encoding="utf-8")
 
 ASSETS = {
     "torn-cream-paper.png": b"\x89PNG\r\n\x1a\n",
@@ -18,12 +20,12 @@ ASSETS = {
 }
 
 for filename, signature in ASSETS.items():
-    path = ROOT / "assets" / "paper" / filename
+    path = SITE / "assets" / "paper" / filename
     assert path.is_file(), f"missing paper asset: {path}"
     assert path.read_bytes().startswith(signature), f"invalid asset signature: {path}"
 
 for filename in ("torn-cream-paper.png", "grey-masking-tape.png"):
-    path = ROOT / "assets" / "paper" / filename
+    path = SITE / "assets" / "paper" / filename
     with path.open("rb") as stream:
         stream.read(25)
         color_type = struct.unpack(">B", stream.read(1))[0]
