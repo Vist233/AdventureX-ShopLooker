@@ -48,7 +48,7 @@ python scripts/build_site.py
 # Cloudflare is occasionally unreachable directly from this workspace. Prefer
 # the existing local proxy and retry directly if the proxy is unavailable.
 run_wrangler() {
-  local log_path=${WRANGLER_LOG_PATH:-/tmp/wrangler-yongge.log}
+  local log_path=${WRANGLER_LOG_PATH:-/tmp/wrangler-shopvalidator.log}
   if WRANGLER_LOG_PATH="$log_path" \
     HTTPS_PROXY=${HTTPS_PROXY:-http://127.0.0.1:7897} \
     HTTP_PROXY=${HTTP_PROXY:-http://127.0.0.1:7897} \
