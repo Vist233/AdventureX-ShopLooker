@@ -92,6 +92,9 @@ globalThis.fetch = async (input, init = {}) => {
   }
 
   if (url.pathname.includes("/geocoder/")) {
+    if (url.searchParams.get("location") === "31.2345,121.4745") {
+      return Response.json({ status: 121, message: "此key每日调用量已达到上限" });
+    }
     return Response.json({
       status: 0,
       result: {
@@ -301,6 +304,15 @@ try {
   const picked = await pickedResponse.json();
   assert.equal(picked.context.mode, "map-picker");
   assert.equal(picked.context.location.latitude, 31.2304);
+
+  const degradedPickResponse = await request(
+    "/api/map/pick-context?lat=31.2345&lng=121.4745&category=咖啡"
+  );
+  assert.equal(degradedPickResponse.status, 200);
+  const degradedPick = await degradedPickResponse.json();
+  assert.equal(degradedPick.context.location.addressResolution, "approximate");
+  assert.match(degradedPick.context.location.address, /定位点/);
+  assert.equal(degradedPick.context.nearby.count, 2);
 
   const staticResponse = await request("/api/map/static?lat=31.2304&lng=121.4737&zoom=16");
   assert.equal(staticResponse.status, 200);

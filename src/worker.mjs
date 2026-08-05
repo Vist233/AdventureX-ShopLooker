@@ -308,13 +308,17 @@ async function buildContextFromGcj02(lat, lng, category, keys, options = {}) {
   if (!validCoordinate(lat, lng)) throw new Error("腾讯地图坐标无效");
   const center = `${lat},${lng}`;
   const baseKeyword = category && category !== "我不知道" ? category : "餐饮";
-  const [reverse, nearby] = await Promise.all([
+  // Reverse geocoding has its own Tencent quota. It must not take down the
+  // whole location report when nearby search is still usable.
+  const [reverseAttempt, nearby] = await Promise.all([
     tencentRequest("/ws/geocoder/v1/", {
       location: center,
       get_poi: 1,
       poi_options: "address_format=short;radius=1000;policy=1",
       output: "json"
-    }, keys),
+    }, keys)
+      .then((data) => ({ data, error: null }))
+      .catch((error) => ({ data: null, error })),
     tencentRequest("/ws/place/v1/search", {
       keyword: baseKeyword,
       boundary: `nearby(${center},800,0)`,
@@ -325,7 +329,8 @@ async function buildContextFromGcj02(lat, lng, category, keys, options = {}) {
     }, keys)
   ]);
 
-  const reverseResult = reverse.result || {};
+  const reverse = reverseAttempt.data;
+  const reverseResult = reverse?.result || {};
   const addressComponent = reverseResult.address_component || {};
   const landmarks = (reverseResult.pois || []).slice(0, 10).map((poi) => ({
     title: cleanText(poi.title, 36),
@@ -338,6 +343,10 @@ async function buildContextFromGcj02(lat, lng, category, keys, options = {}) {
     category: cleanText(poi.category, 50),
     distance: Number(poi._distance) || 0
   }));
+  const nearestAddress = trimText(nearby.data?.[0]?.address, 100);
+  const approximateAddress = trimText(options.fallbackAddress, 100)
+    || (nearestAddress ? `附近：${nearestAddress}` : `定位点（${lat.toFixed(6)}，${lng.toFixed(6)}）`);
+  const addressResolution = reverseResult.address ? "exact" : "approximate";
 
   // Site-report mode needs a richer read of the surroundings than a single
   // competitor keyword: who lives / works / passes through here. Each group is
@@ -376,7 +385,8 @@ async function buildContextFromGcj02(lat, lng, category, keys, options = {}) {
         // frontend strips them before it persists the private case snapshot.
         latitude: Number(lat.toFixed(6)),
         longitude: Number(lng.toFixed(6)),
-        address: cleanText(reverseResult.address, 100) || cleanText(options.fallbackAddress, 100),
+        address: trimText(reverseResult.address, 100) || approximateAddress,
+        addressResolution,
         province: cleanText(addressComponent.province, 20),
         city: cleanText(addressComponent.city, 20),
         district: cleanText(addressComponent.district, 20),
