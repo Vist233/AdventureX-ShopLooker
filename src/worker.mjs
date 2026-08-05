@@ -285,15 +285,83 @@ async function tencentRequest(path, params, keys) {
         },
         signal: AbortSignal.timeout(7000)
       });
-      if (!response.ok) throw new Error(`腾讯地图请求失败：${response.status}`);
+      if (!response.ok) {
+        const error = new Error(`腾讯地图请求失败：${response.status}`);
+        error.tencentStatus = response.status;
+        throw error;
+      }
       const data = await response.json();
-      if (data.status !== 0) throw new Error(data.message || "腾讯地图返回异常");
+      if (data.status !== 0) {
+        const error = new Error(data.message || "腾讯地图返回异常");
+        error.tencentStatus = Number(data.status);
+        throw error;
+      }
       return data;
     } catch (error) {
       lastError = error;
     }
   }
   throw lastError || new Error("腾讯地图密钥尚未配置");
+}
+
+function isTencentQuotaError(error) {
+  return Number(error?.tencentStatus) === 121
+    || /每日调用量已达到上限/u.test(String(error?.message || ""));
+}
+
+function quotaFallbackContext({ lat, lng, mode, category, fallbackAddress, coordinateSystem, reason }) {
+  const hasCoordinates = validCoordinate(lat, lng);
+  const location = {
+    address: trimText(fallbackAddress, 100)
+      || (hasCoordinates ? `定位点（${Number(lat).toFixed(6)}，${Number(lng).toFixed(6)}）` : "地址已记录，等待地图恢复"),
+    addressResolution: "approximate"
+  };
+  if (hasCoordinates) {
+    location.latitude = Number(Number(lat).toFixed(6));
+    location.longitude = Number(Number(lng).toFixed(6));
+  }
+  return {
+    context: {
+      source: "腾讯位置服务",
+      mode: mode || "gps",
+      coordinateSystem: coordinateSystem || "GCJ-02",
+      location,
+      nearby: {
+        keyword: category || "餐饮",
+        radiusMeters: 800,
+        count: null,
+        places: []
+      },
+      landmarks: [],
+      environment: [],
+      dataQuality: {
+        status: "degraded",
+        reason: reason || "腾讯地图部分服务暂时达到调用上限",
+        requiresOnSiteVerification: true
+      }
+    }
+  };
+}
+
+function staticMapQuotaFallback(lat, lng, zoom) {
+  const label = `${Number(lat).toFixed(5)}，${Number(lng).toFixed(5)} · 缩放 ${zoom}`;
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 360" role="img" aria-label="地图额度暂时不可用">
+  <rect width="640" height="360" fill="#f3f1ea"/>
+  <path d="M0 72H640M0 144H640M0 216H640M0 288H640M128 0V360M256 0V360M384 0V360M512 0V360" stroke="#d4d0c5" stroke-width="1"/>
+  <path d="M0 300C90 260 150 290 230 230S380 155 470 185s110 5 170-45" fill="none" stroke="#9a9589" stroke-width="3" stroke-dasharray="8 8"/>
+  <circle cx="320" cy="180" r="10" fill="#1c1c1a"/><circle cx="320" cy="180" r="24" fill="none" stroke="#1c1c1a" stroke-width="2"/>
+  <rect x="24" y="24" width="300" height="58" fill="#fffdf8" stroke="#1c1c1a"/>
+  <text x="40" y="50" font-family="Arial, sans-serif" font-size="16" fill="#1c1c1a">腾讯地图额度暂时不可用</text>
+  <text x="40" y="70" font-family="Arial, sans-serif" font-size="12" fill="#5f5b52">已保留选点：${label}</text>
+</svg>`;
+  return new Response(svg, {
+    status: 200,
+    headers: {
+      "Content-Type": "image/svg+xml; charset=utf-8",
+      "Cache-Control": "no-store",
+      "X-Content-Type-Options": "nosniff"
+    }
+  });
 }
 
 // Environment signal groups scanned in site-report (rich) mode: who lives,
@@ -312,7 +380,7 @@ async function buildContextFromGcj02(lat, lng, category, keys, options = {}) {
   const baseKeyword = category && category !== "我不知道" ? category : "餐饮";
   // Reverse geocoding has its own Tencent quota. It must not take down the
   // whole location report when nearby search is still usable.
-  const [reverseAttempt, nearby] = await Promise.all([
+  const [reverseAttempt, nearbyAttempt] = await Promise.all([
     tencentRequest("/ws/geocoder/v1/", {
       location: center,
       get_poi: 1,
@@ -329,9 +397,15 @@ async function buildContextFromGcj02(lat, lng, category, keys, options = {}) {
       orderby: "_distance",
       output: "json"
     }, keys)
+      .then((data) => ({ data, error: null }))
+      .catch((error) => ({ data: null, error }))
   ]);
 
   const reverse = reverseAttempt.data;
+  if (nearbyAttempt.error && !isTencentQuotaError(nearbyAttempt.error)) {
+    throw nearbyAttempt.error;
+  }
+  const nearby = nearbyAttempt.data || { count: null, data: [] };
   const reverseResult = reverse?.result || {};
   const addressComponent = reverseResult.address_component || {};
   const landmarks = (reverseResult.pois || []).slice(0, 10).map((poi) => ({
@@ -349,6 +423,9 @@ async function buildContextFromGcj02(lat, lng, category, keys, options = {}) {
   const approximateAddress = trimText(options.fallbackAddress, 100)
     || (nearestAddress ? `附近：${nearestAddress}` : `定位点（${lat.toFixed(6)}，${lng.toFixed(6)}）`);
   const addressResolution = reverseResult.address ? "exact" : "approximate";
+  const dataWarnings = [];
+  if (reverseAttempt.error) dataWarnings.push("逆地址解析暂时不可用");
+  if (nearbyAttempt.error) dataWarnings.push("周边地点搜索暂时不可用");
 
   // Site-report mode needs a richer read of the surroundings than a single
   // competitor keyword: who lives / works / passes through here. Each group is
@@ -397,11 +474,18 @@ async function buildContextFromGcj02(lat, lng, category, keys, options = {}) {
       nearby: {
         keyword: baseKeyword,
         radiusMeters: 800,
-        count: Number(nearby.count) || competitors.length,
+        count: nearbyAttempt.error ? null : (Number(nearby.count) || competitors.length),
         places: competitors
       },
       landmarks,
-      environment
+      environment,
+      ...(dataWarnings.length ? {
+        dataQuality: {
+          status: "degraded",
+          reason: dataWarnings.join("；"),
+          requiresOnSiteVerification: true
+        }
+      } : {})
     }
   };
 }
@@ -437,6 +521,16 @@ export async function getMapContext(url, env) {
       rich: url.searchParams.get("rich") === "1"
     }));
   } catch (error) {
+    if (isTencentQuotaError(error)) {
+      return json(quotaFallbackContext({
+        lat,
+        lng,
+        mode: "gps",
+        category,
+        coordinateSystem: "WGS84",
+        reason: "腾讯地图坐标转换服务暂时达到调用上限"
+      }));
+    }
     return json({
       code: "MAP_UPSTREAM_ERROR",
       message: error instanceof Error ? error.message : "腾讯地图暂时不可用"
@@ -488,6 +582,15 @@ export async function getAddressContext(url, env) {
       rich: url.searchParams.get("rich") === "1"
     }));
   } catch (error) {
+    if (isTencentQuotaError(error)) {
+      return json(quotaFallbackContext({
+        mode: "address",
+        category,
+        fallbackAddress: address,
+        coordinateSystem: "unknown",
+        reason: "腾讯地图地址解析服务暂时达到调用上限"
+      }));
+    }
     return json({
       code: "ADDRESS_LOOKUP_ERROR",
       message: error instanceof Error ? error.message : "地址解析暂时不可用"
@@ -544,9 +647,18 @@ export async function getStaticMap(url, env) {
           headers: { "Accept": "image/avif,image/webp,image/*,*/*;q=0.8", "Referer": "https://shopvalidator.zhangyvjing.com/" },
           signal: AbortSignal.timeout(7000)
         });
-        if (!response.ok) throw new Error(`腾讯静态地图请求失败：${response.status}`);
+        if (!response.ok) {
+          const error = new Error(`腾讯静态地图请求失败：${response.status}`);
+          error.tencentStatus = response.status;
+          throw error;
+        }
         const type = response.headers.get("Content-Type") || "image/png";
-        if (!type.startsWith("image/")) throw new Error("腾讯静态地图返回异常");
+        if (!type.startsWith("image/")) {
+          const payload = await response.clone().json().catch(() => null);
+          const error = new Error(payload?.message || "腾讯静态地图返回异常");
+          error.tencentStatus = Number(payload?.status);
+          throw error;
+        }
         return new Response(response.body, {
           headers: {
             "Content-Type": type,
@@ -560,6 +672,9 @@ export async function getStaticMap(url, env) {
     }
     throw lastError || new Error("腾讯地图密钥尚未配置");
   } catch (error) {
+    if (isTencentQuotaError(lastError || error)) {
+      return staticMapQuotaFallback(lat, lng, zoom);
+    }
     return json({
       code: "STATIC_MAP_ERROR",
       message: error instanceof Error ? error.message : "地图底图暂时不可用"
@@ -1512,13 +1627,23 @@ function siteGeoSummary(record) {
       count: Number(group.count) || 0,
       nearestMeters: Number.isFinite(group.nearestMeters) ? group.nearestMeters : null,
       samples: Array.isArray(group.samples) ? group.samples.slice(0, 3).map((s) => cleanText(s, 36)) : []
-    }))
+    })),
+    dataQuality: ctx.dataQuality && typeof ctx.dataQuality === "object"
+      ? {
+          status: cleanText(ctx.dataQuality.status, 20) || "ok",
+          reason: trimText(ctx.dataQuality.reason, 240),
+          requiresOnSiteVerification: Boolean(ctx.dataQuality.requiresOnSiteVerification)
+        }
+      : { status: "ok", reason: "", requiresOnSiteVerification: false }
   };
 }
 
 function siteMetricsFromGeo(geo) {
   const metrics = [
-    { label: "800米同类竞品", value: `${geo.competitorCount} 个` }
+    {
+      label: "800米同类竞品",
+      value: geo.dataQuality?.status === "degraded" ? "暂未读取" : `${geo.competitorCount} 个`
+    }
   ];
   const crowd = geo.environment
     .filter((group) => group.count > 0)
@@ -1533,12 +1658,14 @@ function siteMetricsFromGeo(geo) {
 
 // Rule-based site judgment used when the LLM is unavailable or returns garbage.
 export function fallbackSiteReport(geo, reportType, category) {
+  const dataDegraded = geo.dataQuality?.status === "degraded";
   const competitors = geo.competitorCount || 0;
   const env = Object.fromEntries(geo.environment.map((group) => [group.label, group.count || 0]));
   const hasCrowd = (env["学校/大学"] || 0) + (env["写字楼/公司"] || 0) + (env["住宅小区"] || 0) > 0;
   let decision = "TEST";
   if (competitors <= 8 && hasCrowd) decision = "GO";
   else if (competitors >= 20 || !hasCrowd) decision = "STOP";
+  if (dataDegraded) decision = "TEST";
 
   const scored = [
     {
@@ -1625,12 +1752,16 @@ export function fallbackSiteReport(geo, reportType, category) {
   const headline = reportType === "recommend"
     ? "这个位置更适合开什么"
     : `这个位置能不能开${category || "这个品类"}`;
-  const reason = reportType === "recommend"
-    ? `周边800米约${competitors}个同类，客群信号${hasCrowd ? "存在但仍需核实" : "偏弱"}；排序只说明相对匹配度，不等于可以直接签约。`
-    : `周边800米约${competitors}个同类竞品，客群信号${hasCrowd ? "较清晰" : "偏弱"}；据此给出能否开的初判，结论需现场验证。`;
+  const reason = dataDegraded
+    ? "地图服务当前不可用，不能把“未读取到竞品”当成周边没有竞争；先恢复地图或到现场核对，再做开店判断。"
+    : reportType === "recommend"
+      ? `周边800米约${competitors}个同类，客群信号${hasCrowd ? "存在但仍需核实" : "偏弱"}；排序只说明相对匹配度，不等于可以直接签约。`
+      : `周边800米约${competitors}个同类竞品，客群信号${hasCrowd ? "较清晰" : "偏弱"}；据此给出能否开的初判，结论需现场验证。`;
 
   const diagnosis = reportType === "recommend"
-    ? `这不是“地图上看着热闹就能开”的结论。当前主要环境线索来自${signalText}，但800米内已有约${competitors}个同类。首选排在前面，是因为它更能承接现有环境线索、较少依赖与成熟餐饮正面硬碰；次选和第三选择分别需要验证高峰与时段场景。三项都必须先用现场观察和低成本试卖证伪。`
+    ? dataDegraded
+      ? "当前地图服务没有返回可用的周边证据，因此不生成“竞争少”或“客群清晰”的结论。先恢复地图数据，或到现场记录竞品、客群与高峰，再决定是否继续。"
+      : `这不是“地图上看着热闹就能开”的结论。当前主要环境线索来自${signalText}，但800米内已有约${competitors}个同类。首选排在前面，是因为它更能承接现有环境线索、较少依赖与成熟餐饮正面硬碰；次选和第三选择分别需要验证高峰与时段场景。三项都必须先用现场观察和低成本试卖证伪。`
     : reason;
   return { decision, title: headline, reason, headline, diagnosis, rankingNarrative: diagnosis, options };
 }
@@ -1753,14 +1884,14 @@ export async function runSiteReport(record, env, body) {
       metrics: {}
     },
     siteMetrics,
-    geo: { address: geo.address, city: geo.city, district: geo.district, competitorCount: geo.competitorCount, competitorKeyword: geo.competitorKeyword, environment: geo.environment },
+    geo: { address: geo.address, city: geo.city, district: geo.district, competitorCount: geo.competitorCount, competitorKeyword: geo.competitorKeyword, environment: geo.environment, dataQuality: geo.dataQuality },
     narrative: { title: core.headline, body: core.diagnosis },
     rankingNarrative: core.rankingNarrative || core.diagnosis,
     explanation: {
       headline: core.headline,
       diagnosis: core.diagnosis,
       whyThesePlans: topPlans.map((plan) => `${plan.bottleneck}：${plan.mechanism}`),
-      caution: `${decisionLabel}——地图只提供环境证据，正式投入前必须现场核对客群与竞争。`
+      caution: `${decisionLabel}——地图只提供环境证据，正式投入前必须现场核对客群与竞争。${geo.dataQuality?.status === "degraded" ? ` 当前地图状态：${geo.dataQuality.reason || "部分服务不可用"}。` : ""}`
     },
     topPlans,
     candidateCount: topPlans.length,
