@@ -14,8 +14,13 @@ const payload = await response.json();
 
 assert.equal(response.status, 200, payload.message || "腾讯地图联调失败");
 assert.equal(payload.context?.source, "腾讯位置服务");
-assert.ok(payload.context?.location?.address, "逆地址解析没有返回地址");
-assert.ok(Number.isFinite(payload.context?.nearby?.count), "周边搜索没有返回数量");
+assert.ok(payload.context?.location?.address, "地图联调没有返回可用位置标签");
+if (payload.context?.dataQuality?.status === "degraded") {
+  assert.equal(payload.context.nearby.count, null, "降级地图不应伪造竞品数量");
+  assert.equal(payload.context.location.addressResolution, "approximate");
+} else {
+  assert.ok(Number.isFinite(payload.context?.nearby?.count), "周边搜索没有返回数量");
+}
 
 console.log(JSON.stringify({
   status: "ok",
