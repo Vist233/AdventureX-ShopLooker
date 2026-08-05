@@ -314,6 +314,19 @@ try {
   assert.match(degradedPick.context.location.address, /定位点/);
   assert.equal(degradedPick.context.nearby.count, 2);
 
+  // Secrets are opaque credentials. Symbols must survive normalization before
+  // they are appended to the Tencent request URL.
+  const opaqueKeyStart = upstreamCalls.length;
+  const opaqueKeyResponse = await worker.fetch(
+    new Request("https://example.com/api/map/pick-context?lat=31.2304&lng=121.4737&category=咖啡"),
+    { ...env, TENCENT_MAP_KEY: "opaque+A/B=key" }
+  );
+  assert.equal(opaqueKeyResponse.status, 200);
+  const opaqueKeyCall = upstreamCalls
+    .slice(opaqueKeyStart)
+    .find(({ url }) => url.searchParams.get("key") === "opaque+A/B=key");
+  assert.ok(opaqueKeyCall, "opaque Tencent key should reach the upstream request unchanged");
+
   const staticResponse = await request("/api/map/static?lat=31.2304&lng=121.4737&zoom=16");
   assert.equal(staticResponse.status, 200);
   assert.equal(staticResponse.headers.get("Content-Type"), "image/png");
