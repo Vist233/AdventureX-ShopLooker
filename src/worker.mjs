@@ -249,10 +249,12 @@ function administrativeAreaOnly(address) {
 function tencentMapKeys(env) {
   // Keep the primary key first, then retry the secondary key only when Tencent
   // rejects or cannot serve a request.  The keys remain Worker secrets: no map
-  // request ever exposes either value to the browser.
+  // request ever exposes either value to the browser.  A map key is an opaque
+  // credential, not user-facing text: trim it, but never run it through the
+  // Chinese-text sanitizer (which could silently remove credential symbols).
   return [...new Set([
-    cleanText(env?.TENCENT_MAP_KEY, 160),
-    cleanText(env?.TENCENT_MAP_KEY_SECONDARY, 160)
+    trimText(env?.TENCENT_MAP_KEY, 160),
+    trimText(env?.TENCENT_MAP_KEY_SECONDARY, 160)
   ].filter(Boolean))];
 }
 
