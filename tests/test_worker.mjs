@@ -64,11 +64,17 @@ globalThis.fetch = async (input, init = {}) => {
   }
 
   if (url.pathname.includes("/coord/")) {
+    if (url.searchParams.get("locations") === "31.235,121.475") {
+      return Response.json({ status: 121, message: "此key每日调用量已达到上限" });
+    }
     return Response.json({ status: 0, locations: [{ lat: 31.2304, lng: 121.4737 }] });
   }
 
   if (url.pathname.includes("/geocoder/") && url.searchParams.has("address")) {
     const address = url.searchParams.get("address");
+    if (address === "配额地址") {
+      return Response.json({ status: 121, message: "此key每日调用量已达到上限" });
+    }
     if (address === "备用Key测试地址" && url.searchParams.get("key") === "test-key") {
       return Response.json({ status: 120, message: "主密钥额度已用尽" });
     }
@@ -107,9 +113,16 @@ globalThis.fetch = async (input, init = {}) => {
   }
 
   if (url.pathname.includes("/staticmap/")) {
+    if (url.searchParams.get("center") === "31.235000,121.475000") {
+      return Response.json({ status: 121, message: "此key每日调用量已达到上限" });
+    }
     return new Response("static-map-fixture", {
       headers: { "Content-Type": "image/png" }
     });
+  }
+
+  if (url.pathname.includes("/place/") && url.searchParams.get("keyword") === "配额") {
+    return Response.json({ status: 121, message: "此key每日调用量已达到上限" });
   }
 
   return Response.json({
@@ -313,6 +326,39 @@ try {
   assert.equal(degradedPick.context.location.addressResolution, "approximate");
   assert.match(degradedPick.context.location.address, /定位点/);
   assert.equal(degradedPick.context.nearby.count, 2);
+
+  const degradedGpsResponse = await request(
+    "/api/map/context?lat=31.235&lng=121.475&category=咖啡"
+  );
+  assert.equal(degradedGpsResponse.status, 200);
+  const degradedGps = await degradedGpsResponse.json();
+  assert.equal(degradedGps.context.dataQuality.status, "degraded");
+  assert.equal(degradedGps.context.coordinateSystem, "WGS84");
+  assert.equal(degradedGps.context.location.addressResolution, "approximate");
+
+  const degradedAddressResponse = await request(
+    "/api/map/address-context?address=配额地址&category=咖啡"
+  );
+  assert.equal(degradedAddressResponse.status, 200);
+  const degradedAddress = await degradedAddressResponse.json();
+  assert.equal(degradedAddress.context.mode, "address");
+  assert.equal(degradedAddress.context.location.address, "配额地址");
+  assert.equal(degradedAddress.context.dataQuality.status, "degraded");
+
+  const degradedNearbyResponse = await request(
+    "/api/map/pick-context?lat=31.2304&lng=121.4737&category=配额"
+  );
+  assert.equal(degradedNearbyResponse.status, 200);
+  const degradedNearby = await degradedNearbyResponse.json();
+  assert.equal(degradedNearby.context.nearby.count, null);
+  assert.equal(degradedNearby.context.dataQuality.status, "degraded");
+
+  const degradedStaticResponse = await request(
+    "/api/map/static?lat=31.235&lng=121.475&zoom=16"
+  );
+  assert.equal(degradedStaticResponse.status, 200);
+  assert.match(degradedStaticResponse.headers.get("Content-Type"), /image\/svg\+xml/);
+  assert.match(await degradedStaticResponse.text(), /额度暂时不可用/);
 
   // Secrets are opaque credentials. Symbols must survive normalization before
   // they are appended to the Tencent request URL.
