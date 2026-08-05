@@ -125,6 +125,10 @@ globalThis.fetch = async (input, init = {}) => {
     return Response.json({ status: 121, message: "此key每日调用量已达到上限" });
   }
 
+  if (url.pathname.includes("/place/") && url.searchParams.get("keyword") === "冷门品类") {
+    return Response.json({ status: 0, count: 0, data: [] });
+  }
+
   return Response.json({
     status: 0,
     count: 2,
@@ -333,8 +337,21 @@ try {
   assert.equal(degradedGpsResponse.status, 200);
   const degradedGps = await degradedGpsResponse.json();
   assert.equal(degradedGps.context.dataQuality.status, "degraded");
-  assert.equal(degradedGps.context.coordinateSystem, "WGS84");
-  assert.equal(degradedGps.context.location.addressResolution, "approximate");
+  assert.equal(degradedGps.context.coordinateSystem, "WGS84-approximate");
+  assert.equal(degradedGps.context.location.addressResolution, "exact");
+  assert.equal(degradedGps.context.nearby.count, 2);
+  assert.match(degradedGps.context.dataQuality.reason, /坐标转换服务/);
+
+  const fallbackKeywordResponse = await request(
+    "/api/map/pick-context?lat=31.2304&lng=121.4737&category=冷门品类"
+  );
+  assert.equal(fallbackKeywordResponse.status, 200);
+  const fallbackKeyword = await fallbackKeywordResponse.json();
+  assert.equal(fallbackKeyword.context.nearby.count, 2);
+  assert.equal(fallbackKeyword.context.nearby.requestedKeyword, "冷门品类");
+  assert.equal(fallbackKeyword.context.nearby.keyword, "餐饮");
+  assert.equal(fallbackKeyword.context.nearby.fallbackUsed, true);
+  assert.match(fallbackKeyword.context.dataQuality.reason, /餐饮/);
 
   const degradedAddressResponse = await request(
     "/api/map/address-context?address=配额地址&category=咖啡"

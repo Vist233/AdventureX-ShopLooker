@@ -337,6 +337,7 @@ function quotaFallbackContext({ lat, lng, mode, category, fallbackAddress, coord
       dataQuality: {
         status: "degraded",
         reason: reason || "腾讯地图部分服务暂时达到调用上限",
+        warnings: [reason || "腾讯地图部分服务暂时达到调用上限"],
         requiresOnSiteVerification: true
       }
     }
@@ -374,6 +375,40 @@ const ENVIRONMENT_GROUPS = [
   { key: "retail", label: "商场/超市", keyword: "商场" }
 ];
 
+async function searchNearbyPlaces(center, category, keys) {
+  const primaryKeyword = category && category !== "我不知道" ? category : "餐饮";
+  const keywords = [...new Set([primaryKeyword, "餐饮"].filter(Boolean))];
+  let lastData = null;
+  let lastKeyword = primaryKeyword;
+
+  for (const keyword of keywords) {
+    const data = await tencentRequest("/ws/place/v1/search", {
+      keyword,
+      boundary: `nearby(${center},800,0)`,
+      page_size: 20,
+      page_index: 1,
+      orderby: "_distance",
+      output: "json"
+    }, keys);
+    lastData = data;
+    lastKeyword = keyword;
+    const places = Array.isArray(data?.data) ? data.data : [];
+    if (Number(data?.count) > 0 || places.length > 0 || keyword === keywords.at(-1)) {
+      return {
+        data: { ...data, data: places },
+        keyword,
+        fallbackUsed: keyword !== primaryKeyword
+      };
+    }
+  }
+
+  return {
+    data: { ...(lastData || {}), data: Array.isArray(lastData?.data) ? lastData.data : [] },
+    keyword: lastKeyword,
+    fallbackUsed: lastKeyword !== primaryKeyword
+  };
+}
+
 async function buildContextFromGcj02(lat, lng, category, keys, options = {}) {
   if (!validCoordinate(lat, lng)) throw new Error("腾讯地图坐标无效");
   const center = `${lat},${lng}`;
@@ -389,15 +424,8 @@ async function buildContextFromGcj02(lat, lng, category, keys, options = {}) {
     }, keys)
       .then((data) => ({ data, error: null }))
       .catch((error) => ({ data: null, error })),
-    tencentRequest("/ws/place/v1/search", {
-      keyword: baseKeyword,
-      boundary: `nearby(${center},800,0)`,
-      page_size: 20,
-      page_index: 1,
-      orderby: "_distance",
-      output: "json"
-    }, keys)
-      .then((data) => ({ data, error: null }))
+    searchNearbyPlaces(center, baseKeyword, keys)
+      .then((result) => ({ ...result, error: null }))
       .catch((error) => ({ data: null, error }))
   ]);
 
@@ -423,9 +451,10 @@ async function buildContextFromGcj02(lat, lng, category, keys, options = {}) {
   const approximateAddress = trimText(options.fallbackAddress, 100)
     || (nearestAddress ? `附近：${nearestAddress}` : `定位点（${lat.toFixed(6)}，${lng.toFixed(6)}）`);
   const addressResolution = reverseResult.address ? "exact" : "approximate";
-  const dataWarnings = [];
+  const dataWarnings = [...(options.dataQualityWarnings || [])];
   if (reverseAttempt.error) dataWarnings.push("逆地址解析暂时不可用");
   if (nearbyAttempt.error) dataWarnings.push("周边地点搜索暂时不可用");
+  if (nearbyAttempt.fallbackUsed) dataWarnings.push(`未找到“${baseKeyword}”，已用“餐饮”补充搜索`);
 
   // Site-report mode needs a richer read of the surroundings than a single
   // competitor keyword: who lives / works / passes through here. Each group is
@@ -458,7 +487,7 @@ async function buildContextFromGcj02(lat, lng, category, keys, options = {}) {
     context: {
       source: "腾讯位置服务",
       mode: options.mode || "gps",
-      coordinateSystem: "GCJ-02",
+      coordinateSystem: options.coordinateSystem || "GCJ-02",
       location: {
         // The browser uses these only for the temporary map picker. The
         // frontend strips them before it persists the private case snapshot.
@@ -472,7 +501,9 @@ async function buildContextFromGcj02(lat, lng, category, keys, options = {}) {
         adcode: cleanText(reverseResult.ad_info?.adcode, 12)
       },
       nearby: {
-        keyword: baseKeyword,
+        keyword: nearbyAttempt.keyword || baseKeyword,
+        requestedKeyword: baseKeyword,
+        fallbackUsed: Boolean(nearbyAttempt.fallbackUsed),
         radiusMeters: 800,
         count: nearbyAttempt.error ? null : (Number(nearby.count) || competitors.length),
         places: competitors
@@ -483,6 +514,7 @@ async function buildContextFromGcj02(lat, lng, category, keys, options = {}) {
         dataQuality: {
           status: "degraded",
           reason: dataWarnings.join("；"),
+          warnings: dataWarnings,
           requiresOnSiteVerification: true
         }
       } : {})
@@ -504,21 +536,37 @@ export async function getMapContext(url, env) {
   try {
     // Browser geolocation is WGS84. Tencent WebService uses GCJ-02, so convert
     // before reverse geocoding and nearby search.
-    const translated = await tencentRequest("/ws/coord/v1/translate", {
-      locations: `${lat},${lng}`,
-      type: 1,
-      output: "json"
-    }, keys);
-    const mapLocation = translated.locations?.[0];
-    const mapLat = Number(mapLocation?.lat);
-    const mapLng = Number(mapLocation?.lng);
-    if (!validCoordinate(mapLat, mapLng)) {
-      throw new Error("腾讯地图坐标转换失败");
+    let mapLat = lat;
+    let mapLng = lng;
+    let coordinateSystem = "GCJ-02";
+    const dataQualityWarnings = [];
+    try {
+      const translated = await tencentRequest("/ws/coord/v1/translate", {
+        locations: `${lat},${lng}`,
+        type: 1,
+        output: "json"
+      }, keys);
+      const mapLocation = translated.locations?.[0];
+      mapLat = Number(mapLocation?.lat);
+      mapLng = Number(mapLocation?.lng);
+      if (!validCoordinate(mapLat, mapLng)) {
+        throw new Error("腾讯地图坐标转换失败");
+      }
+    } catch (error) {
+      if (!isTencentQuotaError(error)) throw error;
+      // Coordinate conversion and POI search have independent Tencent quotas.
+      // If only conversion is exhausted, still query the POI service with the
+      // browser's WGS84 point. The result is deliberately marked approximate;
+      // silently returning no shops would hide usable evidence.
+      coordinateSystem = "WGS84-approximate";
+      dataQualityWarnings.push("坐标转换服务暂时不可用，周边结果按近似位置读取");
     }
 
     return json(await buildContextFromGcj02(mapLat, mapLng, category, keys, {
       mode: "gps",
-      rich: url.searchParams.get("rich") === "1"
+      rich: url.searchParams.get("rich") === "1",
+      coordinateSystem,
+      dataQualityWarnings
     }));
   } catch (error) {
     if (isTencentQuotaError(error)) {
@@ -615,6 +663,16 @@ export async function getPickedMapContext(url, env) {
       rich: url.searchParams.get("rich") === "1"
     }));
   } catch (error) {
+    if (isTencentQuotaError(error)) {
+      return json(quotaFallbackContext({
+        lat,
+        lng,
+        mode: "map-picker",
+        category,
+        coordinateSystem: "GCJ-02",
+        reason: "腾讯地图周边服务暂时达到调用上限"
+      }));
+    }
     return json({
       code: "MAP_UPSTREAM_ERROR",
       message: error instanceof Error ? error.message : "腾讯地图暂时不可用"

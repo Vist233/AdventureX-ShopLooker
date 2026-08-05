@@ -16,8 +16,12 @@ assert.equal(response.status, 200, payload.message || "腾讯地图联调失败"
 assert.equal(payload.context?.source, "腾讯位置服务");
 assert.ok(payload.context?.location?.address, "地图联调没有返回可用位置标签");
 if (payload.context?.dataQuality?.status === "degraded") {
-  assert.equal(payload.context.nearby.count, null, "降级地图不应伪造竞品数量");
-  assert.equal(payload.context.location.addressResolution, "approximate");
+  assert.ok(payload.context.dataQuality.reason, "降级地图必须说明不可用原因");
+  if (payload.context.nearby.count === null) {
+    assert.equal(payload.context.nearby.places.length, 0, "周边不可用时不应伪造竞品");
+  } else {
+    assert.ok(Number.isFinite(payload.context.nearby.count), "部分降级仍应保留真实周边数量");
+  }
 } else {
   assert.ok(Number.isFinite(payload.context?.nearby?.count), "周边搜索没有返回数量");
 }

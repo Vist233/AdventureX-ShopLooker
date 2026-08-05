@@ -319,7 +319,9 @@ function mapContextToCandidate(data, source) {
     city: location.city || "",
     district: location.district || "",
     nearbyCount: Number.isFinite(nearby.count) ? nearby.count : null,
+    nearbyFallbackUsed: Boolean(nearby.fallbackUsed),
     places: [...(nearby.places || []), ...(context.landmarks || [])],
+    dataQuality: context.dataQuality || null,
     context: persistedContext,
     coordinates: Number.isFinite(latitude) && Number.isFinite(longitude)
       ? { latitude, longitude, coordinateSystem: context.coordinateSystem || "GCJ-02" }
@@ -423,8 +425,9 @@ async function useMapPickerPoint() {
     const data = await fetchJson(`/api/map/pick-context?${params}`);
     if (attempt !== state.locationAttempt) return;
     state.mapContextLoaded = true;
-    renderMapCandidate(mapContextToCandidate(data, "map-picker"));
-    setLocationStatus("notice", "已按图钉更新位置，请确认是不是店铺门口。");
+    const candidate = mapContextToCandidate(data, "map-picker");
+    renderMapCandidate(candidate);
+    setLocationStatus("notice", locationContextNotice(candidate, "已按图钉更新位置，请确认是不是店铺门口。"));
   } catch (error) {
     if (attempt !== state.locationAttempt) return;
     setLocationStatus("error", error.message || "图钉位置暂时无法解析，请重新选择。");
@@ -437,16 +440,31 @@ function renderMapCandidate(candidate) {
   state.locationCandidate = candidate;
   $("mapAddress").textContent = candidate.address;
   $("mapDistrict").textContent = [candidate.city, candidate.district].filter(Boolean).join(" · ") || "位置待你确认";
-  $("mapCompetitors").textContent = Number.isFinite(candidate.nearbyCount) ? `${candidate.nearbyCount} 个` : "未读取";
+  $("mapCompetitorLabel").textContent = candidate.nearbyFallbackUsed ? "800 米餐饮参考" : "800 米同类地点";
+  const degraded = candidate.dataQuality?.status === "degraded";
+  $("mapCompetitors").textContent = Number.isFinite(candidate.nearbyCount)
+    ? `${candidate.nearbyCount} 个`
+    : degraded ? "暂不可用" : "暂无匹配";
   const names = candidate.places
     .map((item) => item.title || item)
     .filter((name, index, all) => name && all.indexOf(name) === index)
     .slice(0, 7);
   $("nearbyTags").innerHTML = names.length
     ? names.map((name) => `<span>${escapeHtml(name)}</span>`).join("")
-    : "<span>周边数据未参与判断</span>";
+    : `<span>${degraded
+      ? escapeHtml(candidate.dataQuality.reason || "腾讯地图周边服务暂时不可用，周边数据未参与判断")
+      : "当前半径内没有匹配的地点"}</span>`;
   $("mapSummary").hidden = false;
   showMapPicker(candidate);
+}
+
+function locationContextNotice(candidate, successText) {
+  const reason = candidate?.dataQuality?.status === "degraded"
+    ? candidate.dataQuality.reason || "地图周边服务暂时不可用"
+    : "";
+  return reason
+    ? `${successText}但${reason}，周边店铺暂未参与判断；请恢复地图后重试，或到现场核对。`
+    : successText;
 }
 
 function confirmLocation() {
@@ -595,8 +613,9 @@ function locateCurrentStore() {
       const data = await fetchMapContext(position.coords.latitude, position.coords.longitude);
       if (attempt !== state.locationAttempt) return;
       state.mapContextLoaded = true;
-      renderMapCandidate(mapContextToCandidate(data, "gps"));
-      setLocationStatus("notice", "地图已找到位置，请确认是不是这家店。");
+      const candidate = mapContextToCandidate(data, "gps");
+      renderMapCandidate(candidate);
+      setLocationStatus("notice", locationContextNotice(candidate, "已取得当前位置，请确认是不是这家店。"));
     } catch (error) {
       renderMapCandidate({
         source: "gps-without-map",
@@ -644,8 +663,9 @@ async function useManualLocation() {
     const data = await fetchAddressContext(address);
     if (attempt !== state.locationAttempt) return;
     state.mapContextLoaded = true;
-    renderMapCandidate(mapContextToCandidate(data, "address"));
-    setLocationStatus("notice", "地图已找到地址，请确认是不是这家店。");
+    const candidate = mapContextToCandidate(data, "address");
+    renderMapCandidate(candidate);
+    setLocationStatus("notice", locationContextNotice(candidate, "已找到这个地址，请确认是不是这家店。"));
   } catch (error) {
     if (attempt !== state.locationAttempt) return;
     if (Number(error.status) >= 400 && Number(error.status) < 500) {
